@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 1,
+  "id": "cucumber-features",
+  "publisher": "tony",
+  "name": "Cucumber Features",
+  "version": "0.1.0",
+  "description": "Browse Cucumber features and scenarios and run them in a terminal.",
+  "engines": { "orca": ">=1.4.0" },
+  "pluginApi": 1,
+  "main": "worker.mjs",
+  "contributes": {
+    "panels": [{ "id": "features", "title": "Cucumber", "icon": "bug", "entry": "panel.html" }],
+    "commands": [
+      { "id": "edit-projects", "title": "Cucumber: Editar proyectos", "context": "global" },
+      { "id": "reload-features", "title": "Cucumber: Recargar features", "context": "global" }
+    ]
+  },
+  "capabilities": [
+    { "kind": "workspace:read" },
+    { "kind": "terminal:send" },
+    { "kind": "notifications:show" }
+  ]
+}

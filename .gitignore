@@ -1,0 +1,7 @@
+node_modules/
+dist/
+projects.json
+/.idea/.gitignore
+/.idea/modules.xml
+/.idea/orca-cucumber-panel-plugin.iml
+/.idea/vcs.xml

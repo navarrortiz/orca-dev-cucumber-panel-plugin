@@ -1,0 +1,83 @@
+<!--
+  Panel markup. The build inlines styles.css and the bundled script at the two
+  placeholders below: Orca's panel CSP blocks every external file.
+  Orca prepends its own <!doctype>/<html>/<head> shell, so start at <body>.
+  Icons are inline Lucide SVGs (Orca's own icon set).
+-->
+<!-- @inline-styles -->
+<body>
+  <header class="header">
+    <div class="header-text">
+      <h3>Cucumber</h3>
+      <p id="summary" class="muted"></p>
+    </div>
+    <button id="refresh" class="icon-button" title="Refrescar" aria-label="Refrescar">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></svg>
+    </button>
+  </header>
+
+  <label class="field">
+    <svg viewBox="0 0 24 24"><path d="M3 6h18" /><path d="M7 12h10" /><path d="M10 18h4" /></svg>
+    <input id="query" type="search" placeholder="Buscar feature, escenario o @tag" aria-label="Buscar features" />
+  </label>
+
+  <ul id="list" class="list"></ul>
+  <p id="empty" class="empty muted"></p>
+  <p id="status" class="status" role="status"></p>
+  <p class="hint muted">Proyectos y recarga: paleta de comandos → <b>Cucumber</b></p>
+
+  <div id="terminal-menu" class="menu" role="menu" aria-labelledby="terminal-menu-label" hidden>
+    <div id="terminal-menu-label" class="menu-label">Enviar a:</div>
+    <div id="terminal-menu-items"></div>
+  </div>
+
+  <template id="menu-item-template">
+    <button class="menu-item" role="menuitem">
+      <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5" /><line x1="12" x2="20" y1="19" y2="19" /></svg>
+      <span class="menu-item-label"></span>
+      <span class="menu-item-hint"></span>
+    </button>
+  </template>
+
+  <template id="project-template">
+    <li class="project">
+      <div class="project-head">
+        <span class="project-text">
+          <span class="project-name"></span>
+          <span class="project-meta"></span>
+        </span>
+        <button class="icon-button run-all" aria-label="Ejecutar todo">
+          <svg viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></svg>
+        </button>
+      </div>
+      <ul class="features"></ul>
+    </li>
+  </template>
+
+  <template id="feature-template">
+    <li>
+      <button class="row feature-row">
+        <svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M10 9H8" /><path d="M16 13H8" /><path d="M16 17H8" /></svg>
+        <span class="row-text">
+          <span class="row-title"></span>
+          <span class="row-preview"></span>
+        </span>
+        <svg class="row-action" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></svg>
+      </button>
+      <ul class="scenarios"></ul>
+    </li>
+  </template>
+
+  <template id="scenario-template">
+    <li>
+      <button class="row scenario-row">
+        <span class="row-text">
+          <span class="row-title"></span>
+          <span class="row-preview"></span>
+        </span>
+        <svg class="row-action" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></svg>
+      </button>
+    </li>
+  </template>
+  <!-- @inline-script -->
+</body>

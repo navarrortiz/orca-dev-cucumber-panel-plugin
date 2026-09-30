@@ -1,0 +1,8 @@
+[
+  {
+    "name": "Mi proyecto",
+    "root": "/ruta/absoluta/al/paquete/con/cucumber",
+    "features": "features",
+    "command": "npx cucumber-js {target}"
+  }
+]
