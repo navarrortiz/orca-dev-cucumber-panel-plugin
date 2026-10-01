@@ -9,7 +9,7 @@
   "pluginApi": 1,
   "main": "worker.mjs",
   "contributes": {
-    "panels": [{ "id": "features", "title": "Cucumber", "icon": "bug", "entry": "panel.html" }],
+    "panels": [{ "id": "features", "title": "E2E Cucumber", "icon": "bug", "entry": "panel.html" }],
     "commands": [
       { "id": "edit-projects", "title": "Cucumber: Editar proyectos", "context": "global" },
       { "id": "reload-features", "title": "Cucumber: Recargar features", "context": "global" },
