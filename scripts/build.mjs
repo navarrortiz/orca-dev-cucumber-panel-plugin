@@ -6,47 +6,61 @@
 import { build } from 'esbuild';
 import { scanProject, validateProjects } from '../src/worker/features.js';
 import { seedProjects } from '../src/worker/orca.js';
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../', import.meta.url);
 const dist = new URL('dist/', root);
 const read = (path) => readFile(new URL(path, root), 'utf8');
 const manifest = JSON.parse(await read('orca-plugin.json'));
+const pluginKey = `${manifest.publisher}.${manifest.id}`;
+// dist/rpc.mjs: panel → worker messenger typed into a terminal (AGENTS.md "Messaging").
+const RPC_CLI = 'rpc.mjs';
 
 checkManifest(manifest);
 // projects.json is personal (gitignored); a fresh clone starts from projects.default.json.
 await seedProjects(fileURLToPath(new URL('projects.json', root)));
 const projects = await Promise.all(loadProjects(JSON.parse(await read('projects.json'))).map(scanProject));
-// Empty dist/ but keep the directory: Orca watches it when it's a dev plugin path.
+// Keep the directory (Orca watches it as a dev plugin path) and only touch files whose content
+// changed: every write reloads the panel/plugin, so a rescan with nothing new must be a no-op.
 await mkdir(dist, { recursive: true });
-for (const f of await readdir(dist)) await rm(new URL(f, dist), { recursive: true, force: true });
+const written = new Set();
+async function emit(file, content) {
+  written.add(file);
+  const url = new URL(file, dist);
+  if ((await readFile(url, 'utf8').catch(() => null)) !== content) await writeFile(url, content);
+}
 
 for (const panel of manifest.contributes?.panels ?? []) {
   const name = panel.entry.replace(/\.html$/, '');
   const [html, css, js] = await Promise.all([
     read(`src/${name}/index.html`),
     read(`src/${name}/styles.css`),
-    bundle({ entryPoints: [`src/${name}/main.js`], format: 'iife', platform: 'browser', define: { __PROJECTS__: JSON.stringify(projects) } }),
+    bundle({ entryPoints: [`src/${name}/main.js`], format: 'iife', platform: 'browser', define: { __PROJECTS__: JSON.stringify(projects), __RPC_PATH__: JSON.stringify(fileURLToPath(new URL(RPC_CLI, dist))) } }),
   ]);
   // Function replacers: bundle text may contain `$&`-style sequences.
   const page = html
     .replace('<!-- @inline-styles -->', () => `<style>\n${css}</style>`)
     .replace('<!-- @inline-script -->', () => `<script>\n${js.replace(/<\/script/gi, '<\\/script')}</script>`);
-  await writeFile(new URL(panel.entry, dist), page);
+  // Carry over what the worker patched in (terminal titles, carriers): resetting it = two reloads.
+  const old = await readFile(new URL(panel.entry, dist), 'utf8').catch(() => '');
+  const data = old.match(/<script id="panel-data" type="application\/json">([^<]*)<\/script>/)?.[1];
+  await emit(panel.entry, data ? page.replace('<script id="panel-data" type="application/json">{}</script>', () => `<script id="panel-data" type="application/json">${data}</script>`) : page);
 }
 
 if (manifest.main) {
-  await writeFile(
-    new URL(manifest.main, dist),
+  await emit(
+    manifest.main,
     // ponytail: absolute path baked in = this machine's checkout; fine for a personal plugin.
     await bundle({ entryPoints: ['src/worker/main.js'], format: 'esm', platform: 'node', define: { __PROJECTS_PATH__: JSON.stringify(fileURLToPath(new URL('projects.json', root))) } }),
   );
 }
 
-await copyFile(new URL('orca-plugin.json', root), new URL('orca-plugin.json', dist));
+await emit(RPC_CLI, await bundle({ entryPoints: ['src/sdk/cli.js'], format: 'esm', platform: 'node', define: { __PLUGIN_KEY__: JSON.stringify(pluginKey) } }));
+await emit('orca-plugin.json', await read('orca-plugin.json'));
+for (const f of await readdir(dist)) if (!written.has(f)) await rm(new URL(f, dist), { recursive: true, force: true });
 const count = projects.reduce((n, p) => n + p.features.length, 0);
-console.log(`built ${manifest.publisher}.${manifest.id}@${manifest.version} (${count} features) → ${fileURLToPath(dist)}`);
+console.log(`built ${pluginKey}@${manifest.version} (${count} features) → ${fileURLToPath(dist)}`);
 for (const p of projects) if (p.error) console.warn(`  ${p.name}: ${p.error}`);
 
 async function bundle(options) {

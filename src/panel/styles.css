@@ -86,7 +86,11 @@ button:disabled { opacity: 0.6; cursor: default; }
 .row-text { display: grid; flex: 1; min-width: 0; }
 .row-title, .row-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-preview { font-size: 11px; color: var(--muted-foreground); }
-.row-action { visibility: hidden; }
+.run .stop { display: none; }
+.run.running polygon { display: none; } /* ▷ becomes ■ while a run is live */
+.run.running .stop { display: block; fill: currentColor; }
+.feature-head > .run { visibility: hidden; }
+.feature-head:hover > .run, .feature-head:focus-within > .run, .scenario-head > .run.running, .feature-head > .run.running { visibility: visible; }
 .row-preview:empty { display: none; }
 
 .project { margin-bottom: 12px; }
@@ -98,14 +102,115 @@ button:disabled { opacity: 0.6; cursor: default; }
 .run-all[hidden] { display: none; }
 .features, .scenarios { margin: 0; padding: 0; list-style: none; }
 .feature-row .row-title { font-weight: 500; }
+/* Last run dot (worker-patched results). Pastel fixed colours: Orca has no green token and
+   --destructive is too loud for a 7px dot. Scenario: dot before the title; feature: badge on the
+   file icon's corner; both sit in the row's left padding so titles stay aligned. */
+body { --dot-passed: #7bc99a; --dot-failed: #e07a7a; }
+.scenario-row.passed::before, .scenario-row.failed::before { content: ''; position: absolute; left: 17px; top: calc(50% - 3px); width: 7px; height: 7px; border-radius: 50%; background: var(--dot-passed); }
+.scenario-row.failed::before { background: var(--dot-failed); }
+.feature-row, .scenario-row { position: relative; }
+.feature-row.passed::before, .feature-row.failed::before { content: ''; position: absolute; left: 15px; top: calc(50% + 1px); width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--background); box-sizing: content-box; background: var(--dot-passed); }
+.feature-row.failed::before { background: var(--dot-failed); }
+.feature-row:hover::before, .feature-row:focus-visible::before { border-color: var(--accent); }
+/* Running (live cucumber-js process): the dot becomes a spinner, same spot. */
+.scenario-row.running::before, .feature-row.running::before { content: ''; position: absolute; width: 7px; height: 7px; border-radius: 50%; background: none; border: 1.5px solid var(--muted-foreground); border-top-color: transparent; box-sizing: border-box; animation: spin 0.8s linear infinite; }
+.scenario-row.running::before { left: 17px; top: calc(50% - 3px); }
+.feature-row.running::before { left: 15px; top: calc(50% + 1px); box-shadow: 0 0 0 1.5px var(--background); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.feature-head { display: flex; align-items: center; }
+.features > .feature + .feature { border-top: 1px solid var(--border); }
+/* Folder icon carries the status dot on its corner, like feature rows. */
+.features > .folder > .folder-head:hover .folder-row::before { border-color: color-mix(in srgb, var(--foreground) 6%, var(--muted)); }
+.folder.nested > .folder-head:hover .folder-row::before { border-color: var(--muted); }
+.features > .folder > .folder-head .folder-row::before { border-color: var(--muted); }
+/* Folder sections: full-bleed grey sticky header band per top-level folder, nested ones indented by --d (depth), hairline-separated rows. */
+.features > .folder { margin: 0 -8px; }
+.tree { margin: 0; padding: 0; list-style: none; }
+/* Full-width lines: depth is padding inside each row, never margin on the tree. */
+.tree > .feature { padding: 0 4px 0 calc(8px + var(--d, 0) * 14px); }
+.tree { --line: color-mix(in srgb, var(--border) 50%, var(--background)); } /* internal dividers: half-strength hairline */
+.tree > li + li { border-top: 1px solid var(--line); }
+.folder.nested > .folder-head { position: static; background: transparent; border-block: 0; padding: 0 8px 0 calc(4px + var(--d) * 14px); }
+.folder.nested > .folder-head:hover { background: var(--muted); }
+.folder.nested > .folder-head .row-title { font-weight: 500; }
+.folder.nested > .tree { border-top: 1px solid var(--line); }
+.folder.collapsed > .tree { display: none; }
+.folder-head { display: flex; align-items: center; gap: 2px; padding: 0 8px 0 4px; position: sticky; top: 0; z-index: 1; background: var(--muted); border-block: 1px solid var(--border); }
+.folder + .folder > .folder-head { border-top: 0; }
+.folder-row { gap: 6px; padding: 6px 4px 6px 6px; }
+.folder-row:hover:not(:disabled), .folder-row:focus-visible { background: transparent; color: inherit; }
+.folder-head:hover { background: color-mix(in srgb, var(--foreground) 6%, var(--muted)); }
+.folder-row:focus-visible { box-shadow: inset 0 0 0 1px var(--ring); }
+.folder-row .chevron { width: 12px; height: 12px; }
+.folder-row .chevron { transition: transform 0.1s; transform: rotate(90deg); }
+.folder.collapsed > .folder-head .chevron { transform: none; }
+.folder-row .folder-icon { color: var(--muted-foreground); }
+.folder-row .row-title { font-weight: 600; }
+.folder-count { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; padding: 0 6px; line-height: 18px; border: 1px solid var(--border); border-radius: 999px; background: var(--background); }
+.folder-head > .icon-button { visibility: hidden; }
+.folder-head:hover > .icon-button, .folder-head:focus-within > .icon-button { visibility: visible; }
+.folder-row.passed::before, .folder-row.failed::before { content: ''; position: absolute; left: 31px; top: calc(50% + 1px); width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--background); box-sizing: content-box; background: var(--dot-passed); }
+.folder-row.failed::before { background: var(--dot-failed); }
+.folder-row { position: relative; }
+.folder-row:hover::before, .folder-row:focus-visible::before { border-color: var(--accent); }
+.folder-row.running::before { content: ''; position: absolute; left: 31px; top: calc(50% + 1px); width: 7px; height: 7px; border-radius: 50%; background: none; border: 1.5px solid var(--muted-foreground); border-top-color: transparent; box-sizing: border-box; box-shadow: 0 0 0 1.5px var(--background); animation: spin 0.8s linear infinite; }
+.feature-head { gap: 2px; padding: 2px 0; }
+.toggle svg { transition: transform 0.1s; }
+.collapsed > .feature-head .toggle svg { transform: rotate(-90deg); }
+.scenario.open .toggle svg { transform: rotate(180deg); } /* closed = down, like an open feature */
+.collapsed .scenarios { display: none; }
+.scenario-head { display: flex; align-items: center; gap: 2px; }
+/* Scenario chevron + ⋯ only on hover/focus (an open scenario keeps its chevron); visibility keeps the layout still. */
+.scenario-head > .icon-button { visibility: hidden; }
+.scenario-head:hover > .icon-button, .scenario-head:focus-within > .icon-button, .scenario.open > .scenario-head > .toggle { visibility: visible; }
+
+/* Scenario definition card. Colors from Orca tokens + fixed hues that read on light and dark. */
+.gherkin {
+  margin: 2px 52px 8px 30px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.gherkin[hidden] { display: none; }
+.gherkin .line { display: block; white-space: pre; }
+.gherkin .table, .gherkin .doc { padding-left: 2ch; }
+.gherkin .table.header { font-weight: 600; }
+.gherkin .keyword { color: #c586c0; font-weight: 600; }
+.gherkin .section .keyword { color: #4fa3e0; }
+.gherkin .param { color: #d7a13a; }
+.gherkin .string { color: #5fb36b; }
+.gherkin .pipe { color: var(--muted-foreground); }
+/* Error card under an open failed scenario (see renderErrors). */
+.errors { margin: 4px 0 6px 30px; font-size: 12px; }
+.errors[hidden] { display: none; }
+.err { display: grid; gap: 3px; padding: 6px 8px; border-left: 2px solid var(--dot-failed); background: color-mix(in srgb, var(--dot-failed) 8%, transparent); border-radius: 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0; }
+.err + .err { margin-top: 6px; }
+.err-name { color: var(--muted-foreground); font-weight: 600; }
+.err-step { font-family: var(--font-mono, ui-monospace, monospace); white-space: pre-wrap; }
+.err-status { justify-self: start; padding: 0 6px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; color: #fff; background: var(--dot-failed); }
+.err-message { color: #d9534f; white-space: pre-wrap; font-family: var(--font-mono, ui-monospace, monospace); }
+.err-cause { color: var(--muted-foreground); white-space: pre-wrap; }
+.err details { color: var(--muted-foreground); }
+.err summary { cursor: pointer; font-size: 11px; }
+.err-stack { display: block; padding-left: 1ch; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+.err-report { margin-top: 6px; padding: 3px 10px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: var(--secondary); color: var(--secondary-foreground); font: inherit; font-size: 12px; cursor: pointer; }
+.err-report:hover:not(:disabled) { background: var(--accent); color: var(--accent-foreground); }
+.err-report + .err-report { margin-left: 6px; }
+.scenario-head > .see-error { visibility: visible; color: var(--dot-failed); } /* always shown on a failed row */
+.scenario-head > .see-error[hidden] { display: none; }
+.gherkin .empty { color: var(--muted-foreground); font-style: italic; }
 .scenario-row { padding-left: 30px; }
-.row:hover .row-action, .row:focus-visible .row-action { visibility: visible; }
 
 .menu {
   box-sizing: border-box;
   position: absolute;
   z-index: 10;
   min-width: 180px;
+  max-width: min(320px, calc(100vw - 8px));
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) + 2px);
@@ -127,8 +232,11 @@ button:disabled { opacity: 0.6; cursor: default; }
   background: transparent;
   text-align: left;
 }
-.menu-item svg { width: 16px; height: 16px; color: var(--muted-foreground); }
-.menu-item-label { flex: 1; }
+.menu-item svg { width: 16px; height: 16px; color: var(--muted-foreground); flex: none; }
+.menu-item .icon-claude { color: #d97757; }
+.menu-item .icon-codex { color: var(--foreground); }
+.menu-item .icon-gemini { color: #4285f4; }
+.menu-item-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .menu-item-hint { margin-left: 16px; font-size: 12px; color: var(--muted-foreground); }
 .menu-item:hover, .menu-item:focus-visible { background: var(--accent); color: var(--accent-foreground); outline: none; }
 
@@ -148,3 +256,9 @@ button:disabled { opacity: 0.6; cursor: default; }
   white-space: pre-wrap;
 }
 .status:empty { display: none; }
+/* Open folder (any depth): grey head so the expanded one stands out; collapsed ones stay plain. */
+.folder:not(.collapsed) > .folder-head { background: var(--muted); }
+.folder.collapsed > .folder-head { background: transparent; }
+.folder.collapsed > .folder-head:hover { background: var(--muted); }
+.folder:not(.collapsed) > .folder-head .folder-row::before { border-color: var(--muted); }
+.folder.collapsed > .folder-head .folder-row::before { border-color: var(--background); }

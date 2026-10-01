@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFileSync, writeFile } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,8 +35,8 @@ test('parseFeature reads Spanish titles, 1-based lines and own tags', () => {
     line: 3,
     tags: ['@tenant', '@citas'],
     scenarios: [
-      { name: 'Reagendar desde la agenda', line: 10, tags: ['@smoke'] },
-      { name: 'Reagendar desde <origen>', line: 13, tags: [] },
+      { keyword: 'Escenario', name: 'Reagendar desde la agenda', line: 10, tags: ['@smoke'], steps: ['Dado algo'] },
+      { keyword: 'Esquema del escenario', name: 'Reagendar desde <origen>', line: 13, tags: [], steps: ['Cuando pide reagendar', 'Ejemplos:', '| origen |'] },
     ],
   });
 });
@@ -53,6 +54,7 @@ test('validateProjects requires name, absolute root and a {target} command', () 
     '[0].root must be an absolute path',
     '[0].command must contain {target}',
   ]);
+  assert.deepEqual(validateProjects([{ name: 'a', root: '/x', command: 'x {target}', commands: { Headed: 'x' } }]), ['[0].commands["Headed"] must contain {target}']);
   assert.deepEqual(validateProjects({}), ['must be an array of { name, root, command, features? }']);
 });
 
@@ -69,6 +71,7 @@ test('scanProject lists features recursively with root-relative paths, and repor
   assert.match(missing.error, /^No existe .*nope$/);
   assert.deepEqual(missing.features, []);
 });
+
 
 test('editProjects creates the file if missing before opening it', async () => {
   const calls = [];
@@ -92,9 +95,10 @@ test('reportErrors notifies and rethrows', async () => {
 test('activate registers every worker command in the manifest', async () => {
   const manifest = JSON.parse(readFileSync(new URL('../orca-plugin.json', import.meta.url), 'utf8'));
   const commands = new Map();
-  await activate({ commands: { register: (id, fn) => commands.set(id, fn) }, host: { call: async () => {} }, log: () => {} }, '/tmp/cucumber-panel-test-none.json', '/tmp/cucumber-panel-test-none.html');
+  await activate({ commands: { register: (id, fn) => commands.set(id, fn) }, host: { call: async () => {} }, log: () => {} }, '/tmp/cucumber-panel-test-none.json', '/tmp/cucumber-panel-test-none.html', { call: async () => { throw new Error('no Orca in tests'); } });
   deactivate();
   const declared = manifest.contributes.commands.filter((c) => !c.action).map((c) => c.id);
+  assert.ok(commands.has('sdk-invoke'), 'the messaging SDK registers its entry command');
   assert.deepEqual([...commands.keys()].sort(), declared.sort());
 });
 

@@ -5,3 +5,5 @@ projects.json
 /.idea/modules.xml
 /.idea/orca-cucumber-panel-plugin.iml
 /.idea/vcs.xml
+results.json
+/.idea/git_toolbox_prj.xml

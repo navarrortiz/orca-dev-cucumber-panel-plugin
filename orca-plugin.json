@@ -12,7 +12,8 @@
     "panels": [{ "id": "features", "title": "Cucumber", "icon": "bug", "entry": "panel.html" }],
     "commands": [
       { "id": "edit-projects", "title": "Cucumber: Editar proyectos", "context": "global" },
-      { "id": "reload-features", "title": "Cucumber: Recargar features", "context": "global" }
+      { "id": "reload-features", "title": "Cucumber: Recargar features", "context": "global" },
+      { "id": "sdk-invoke", "title": "Cucumber: SDK (interno)", "context": "global" }
     ]
   },
   "capabilities": [

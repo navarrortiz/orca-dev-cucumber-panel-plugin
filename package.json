@@ -6,7 +6,8 @@
     "build": "node scripts/build.mjs",
     "dev": "node --watch-path=src --watch-path=orca-plugin.json --watch-path=projects.json scripts/build.mjs",
     "test": "node --test",
-    "check": "pnpm test && pnpm build"
+    "check": "pnpm test && pnpm build",
+    "reload-worker": "node dist/rpc.mjs --restart"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"
