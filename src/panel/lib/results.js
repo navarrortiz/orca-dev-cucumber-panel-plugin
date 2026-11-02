@@ -7,12 +7,13 @@ function combine(list) {
   if (!list.length) return null;
   const failed = list.filter((r) => r.status === 'failed');
   const errors = failed.flatMap((r) => (r.error ? [r.error] : []));
-  return failed.length ? { status: 'failed', at: latest(failed).at, errors } : { status: 'passed', at: latest(list).at, errors };
+  const last = latest(list).at; // age badge: latest run of any scenario, even if a failure is older
+  return failed.length ? { status: 'failed', at: latest(failed).at, last, errors } : { status: 'passed', at: last, last, errors };
 }
 const escape = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
- * @returns {{ status: 'passed'|'failed', at: number, errors: string[] } | null}
+ * @returns {{ status: 'passed'|'failed', at: number, last: number, errors: string[] } | null}
  * Outlines: cucumber reports each example under the name with `<placeholders>` filled in, so a
  * name with `<…>` is matched as a pattern and its examples combined.
  */
@@ -39,6 +40,12 @@ export function folderResult(results, root, features) {
   return combine(features.flatMap((f) => f.scenarios.map((s) => scenarioResult(results, root, f.file, s.name))).filter(Boolean));
 }
 
+/** Failed-scenarios badge: { failed, total } over every scenario of `features` (outline = 1). */
+export function failedCount(results, root, features) {
+  const all = features.flatMap((f) => f.scenarios.map((s) => scenarioResult(results, root, f.file, s.name)));
+  return { failed: all.filter((r) => r?.status === 'failed').length, total: all.length };
+}
+
 /** Tooltip suffix: "Última ejecución: falló (hace 2 horas)". Intl.RelativeTimeFormat, no lib. */
 export function describeResult(result, now = Date.now(), locale = 'es') {
   if (!result) return '';
@@ -50,12 +57,20 @@ export function describeResult(result, now = Date.now(), locale = 'es') {
   return `Última ejecución: ${result.status === 'failed' ? 'falló' : 'pasó'} (${ago})`;
 }
 
+/** Age badge: "5mi", "3h", "2d", "1w", "4m", "1y" since `at` ("<1mi" under a minute); `stale` past 5 days. */
+export function shortAge(at, now = Date.now()) {
+  const min = (now - at) / 60000;
+  const units = [['y', 525600], ['m', 43200], ['w', 10080], ['d', 1440], ['h', 60], ['mi', 1]];
+  const [unit, size] = units.find(([, size]) => min >= size) ?? [];
+  return { text: unit ? `${Math.floor(min / size)}${unit}` : '<1mi', stale: min > 7200 };
+}
+
 /**
- * `running` = targets of live cucumber-js runs (`file` or `file:line`). A feature spins if it or any
+ * `running` = targets of live cucumber-js runs (`file` or `file:line`). A feature spins if it, a folder above it, or any
  * of its scenarios runs; a scenario spins if it runs or its whole feature does.
  */
 export function isRunning(running, file, scenarios, line) {
-  if (running.includes(file)) return true;
+  if (running.some((t) => t === file || file.startsWith(`${t}/`))) return true; // the feature or a folder above it
   if (line) return running.includes(`${file}:${line}`);
   return scenarios.some((s) => running.includes(`${file}:${s.line}`));
 }

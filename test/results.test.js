@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mergeReport, parseReport, reportPath } from '../src/worker/results.js';
 import { refreshResults } from '../src/worker/handlers.js';
-import { describeResult, errorContext, featureResult, highlightError, scenarioResult } from '../src/panel/lib/results.js';
+import { describeResult, errorContext, shortAge, failedCount, featureResult, highlightError, scenarioResult } from '../src/panel/lib/results.js';
 
 const step = (status) => ({ result: { status } });
 const REPORT = [
@@ -51,10 +51,10 @@ test('refreshResults reads each report, tolerates missing/half-written ones, per
 
 test('panel: feature dot = failed if any known scenario failed, latest date wins, unknown when none ran', () => {
   const results = { '/p|f|A': { status: 'passed', at: 10 }, '/p|f|B': { status: 'failed', at: 3 } };
-  assert.deepEqual(scenarioResult(results, '/p', 'f', 'A'), { status: 'passed', at: 10, errors: [] });
+  assert.deepEqual(scenarioResult(results, '/p', 'f', 'A'), { status: 'passed', at: 10, last: 10, errors: [] });
   assert.equal(scenarioResult(results, '/p', 'f', 'Z'), null);
-  assert.deepEqual(featureResult(results, '/p', 'f', [{ name: 'A' }, { name: 'B' }, { name: 'Z' }]), { status: 'failed', at: 3, errors: [] });
-  assert.deepEqual(featureResult(results, '/p', 'f', [{ name: 'A' }, { name: 'Z' }]), { status: 'passed', at: 10, errors: [] });
+  assert.deepEqual(featureResult(results, '/p', 'f', [{ name: 'A' }, { name: 'B' }, { name: 'Z' }]), { status: 'failed', at: 3, last: 10, errors: [] });
+  assert.deepEqual(featureResult(results, '/p', 'f', [{ name: 'A' }, { name: 'Z' }]), { status: 'passed', at: 10, last: 10, errors: [] });
   assert.equal(featureResult(results, '/p', 'f', [{ name: 'Z' }]), null);
   assert.equal(describeResult({ status: 'failed', at: 1000 - 2 * 3600_000 }, 1000), 'Última ejecución: falló (hace 2 horas)');
   assert.equal(describeResult({ status: 'passed', at: 1000 }, 1000), 'Última ejecución: pasó (ahora mismo)');
@@ -71,8 +71,11 @@ test('runningTargets: feature/scenario tokens of live cucumber-js command lines'
     "sh -c cd /p && E2E=1 pnpm exec cucumber-js --profile panel 'features/auth/login.feature:12'",
     'node cucumber-js features/b.feature features',
     'vim features/c.feature',
+    'node /x/cucumber-js --profile panel features/auth/ --import ./support/x.js',
   ];
-  assert.deepEqual(runningTargets(lines), ['features/auth/login.feature:12', 'features/b.feature']);
+  assert.deepEqual(runningTargets(lines), ['features/auth', 'features/auth/login.feature:12', 'features/b.feature']);
+  assert.equal(isRunning(['features/auth'], 'features/auth/login.feature', []), true); // folder running
+  assert.equal(isRunning(['features/au'], 'features/auth/login.feature', []), false);
   assert.equal(isRunning(['features/a.feature:12'], 'features/a.feature', [], 12), true);
   assert.equal(isRunning(['features/a.feature:12'], 'features/a.feature', [{ line: 12 }]), true);
   assert.equal(isRunning(['features/a.feature'], 'features/a.feature', [], 12), true); // whole feature running
@@ -84,7 +87,7 @@ test('runningTargets: feature/scenario tokens of live cucumber-js command lines'
   procs = [];
   await new Promise((r) => setTimeout(r, 12));
   stop();
-  assert.deepEqual(seen, [['features/auth/login.feature:12', 'features/b.feature'], []]);
+  assert.deepEqual(seen, [['features/auth', 'features/auth/login.feature:12', 'features/b.feature'], []]);
 });
 
 test('runningPids + stopRun: pids per target, kill only those of the target', async () => {
@@ -112,9 +115,9 @@ test('outline scenarios: results of the filled-in example names combine under th
     '/p|f|El drawer en estado CERRADA ofrece acciones': { status: 'failed', at: 2, error: 'boom' },
     '/p|f|Otro (x)': { status: 'passed', at: 9 },
   };
-  assert.deepEqual(scenarioResult(results, '/p', 'f', 'El drawer en estado <codigo> ofrece acciones'), { status: 'failed', at: 2, errors: ['El drawer en estado CERRADA ofrece acciones\nboom'] });
+  assert.deepEqual(scenarioResult(results, '/p', 'f', 'El drawer en estado <codigo> ofrece acciones'), { status: 'failed', at: 2, last: 5, errors: ['El drawer en estado CERRADA ofrece acciones\nboom'] });
   assert.equal(scenarioResult(results, '/p', 'f', 'El drawer en estado <codigo> cierra'), null);
-  assert.deepEqual(scenarioResult(results, '/p', 'f', 'Otro (<v>)'), { status: 'passed', at: 9, errors: [] });
+  assert.deepEqual(scenarioResult(results, '/p', 'f', 'Otro (<v>)'), { status: 'passed', at: 9, last: 9, errors: [] });
   assert.equal(featureResult(results, '/p', 'f', [{ name: 'El drawer en estado <codigo> ofrece acciones' }]).status, 'failed');
 });
 
@@ -124,6 +127,22 @@ test('openReport serves the HTML report over loopback and opens it in the Orca b
   const runtime = { openUrl: async (url) => opened.push(url) };
   assert.deepEqual(await openReport({ serveReport: async ({ root }) => `http://127.0.0.1:1/report?root=${root}` }, runtime, '/p'), { url: 'http://127.0.0.1:1/report?root=/p' });
   assert.deepEqual(opened, ['http://127.0.0.1:1/report?root=/p']);
+});
+
+test('openEvidence opens the level asked for: project, folder, feature, scenario; nearest existing parent', async () => {
+  const { openEvidence } = await import('../src/worker/handlers.js');
+  const existing = new Set(['/p/reports/evidence/features/a', '/p/reports/evidence/features/a/x', '/p/reports/evidence/features/a/x/medico-ve-su-clinica']);
+  const deps = { readProjects: async () => [{ root: '/p' }, { root: '/q', evidence: 'out/shots' }], openFolder: async () => {}, exists: async (d) => existing.has(d) };
+  const open = async (...args) => (await openEvidence(deps, ...args)).path;
+  assert.equal(await open('/p'), '/p/reports/evidence');
+  assert.equal(await open('/q'), '/q/out/shots');
+  assert.equal(await open('/p', 'features/a'), '/p/reports/evidence/features/a');
+  assert.equal(await open('/p', 'features/a/x.feature'), '/p/reports/evidence/features/a/x');
+  assert.equal(await open('/p', 'features/a/x.feature', 'Médico ve su clínica'), '/p/reports/evidence/features/a/x/medico-ve-su-clinica');
+  assert.equal(await open('/p', 'features/a/x.feature', 'Nunca corrió'), '/p/reports/evidence/features/a/x');
+  assert.equal(await open('/p', 'features/b/y.feature', 'Z'), '/p/reports/evidence');
+  await assert.rejects(openEvidence(deps, '/p', '../etc'), /inside root/);
+  await assert.rejects(openEvidence(deps, '/x'), /no está en projects.json/);
 });
 
 test('highlightError tags example name, failing step + status, message, stack and cause', () => {
@@ -145,4 +164,23 @@ test('errorContext: scenario, absolute file:line, errors as stored', () => {
     errorContext('/p/', 'f.feature', { keyword: 'Escenario', name: 'N', line: 3 }, ['Cuando x → failed\nError: boom\n    at y']),
     'Escenario fallido: N\nArchivo: /p/f.feature:3\n\nCuando x → failed\nError: boom\n    at y',
   );
+});
+
+test('failedCount: failed scenarios over all of them, never-run included in the total', () => {
+  const results = { '/p|f|A': { status: 'failed', at: 1 }, '/p|f|B': { status: 'passed', at: 2 }, '/p|g|C': { status: 'failed', at: 3 } };
+  const features = [{ file: 'f', scenarios: [{ name: 'A' }, { name: 'B' }, { name: 'Z' }] }, { file: 'g', scenarios: [{ name: 'C' }] }];
+  assert.deepEqual(failedCount(results, '/p', features), { failed: 2, total: 4 });
+  assert.deepEqual(failedCount({}, '/p', features), { failed: 0, total: 4 });
+});
+
+test('panel: age badge humanizes to mi/h/d/w/m/y, stale past 5 days', () => {
+  const h = 3600_000;
+  assert.deepEqual(shortAge(0, 30_000), { text: '<1mi', stale: false });
+  assert.deepEqual(shortAge(0, 30 * 60_000), { text: '30mi', stale: false });
+  assert.deepEqual(shortAge(0, 3 * h), { text: '3h', stale: false });
+  assert.deepEqual(shortAge(0, 5 * 24 * h), { text: '5d', stale: false });
+  assert.deepEqual(shortAge(0, 6 * 24 * h), { text: '6d', stale: true });
+  assert.deepEqual(shortAge(0, 15 * 24 * h), { text: '2w', stale: true });
+  assert.deepEqual(shortAge(0, 65 * 24 * h), { text: '2m', stale: true });
+  assert.deepEqual(shortAge(0, 400 * 24 * h), { text: '1y', stale: true });
 });

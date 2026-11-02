@@ -2,10 +2,10 @@ import { fileURLToPath } from 'node:url';
 import { createRuntime, OrcaRpc } from '../sdk/runtime.js';
 import { requireAbsolute, requireString } from '../sdk/actions.js';
 import { createWorkerChannel } from '../sdk/worker.js';
-import { ACTION, CARRIER_TITLE, COMMAND } from '../shared/protocol.js';
+import { ACTION, COMMAND } from '../shared/protocol.js';
 import { actions } from './actions.js';
 import { createDeps } from './orca.js';
-import { debounce, editProjects, openReport, refreshResults, reloadFeatures, reportErrors, stopRun, watchRunning } from './handlers.js';
+import { debounce, editProjects, openEvidence, openReport, refreshResults, reloadFeatures, reportErrors, stopRun, watchRunning } from './handlers.js';
 
 let stopProjectsFile;
 let stopFeatures;
@@ -33,8 +33,8 @@ export default async function activate(
   deps = createDeps(ctx.host, projectsPath, panelPath);
   ctx.commands.register(COMMAND.editProjects, () => reportErrors(deps.notify, () => editProjects(deps)));
   ctx.commands.register(COMMAND.reloadFeatures, () => reportErrors(deps.notify, () => reloadFeatures(deps)));
-  // Messaging SDK: registers `sdk-invoke` (panel / CLI → actions.js) and keeps the carrier terminals
-  // + terminal titles patched into panel.html (AGENTS.md "Messaging SDK").
+  // Messaging SDK: registers `sdk-invoke` (panel / CLI → actions.js) and pushes terminal titles +
+  // results + running targets to the open panels (AGENTS.md "Messaging SDK").
   // ponytail: 15 s poll, one RPC each; switch to an event if Orca ever emits terminal changes.
   // Last results per scenario (results.json), shown as a dot in the panel; see results.js.
   const results = await deps.readResults();
@@ -42,7 +42,6 @@ export default async function activate(
   channel = createWorkerChannel({
     ctx,
     runtime: createRuntime(rpc),
-    panelPath,
     data: () => ({ results, running }),
     // Needs this worker's rebuild: wired here, not in actions.js.
     actions: {
@@ -50,9 +49,9 @@ export default async function activate(
       [ACTION.editProjects]: { description: 'Abre projects.json en Orca (lo crea si falta)', run: () => editProjects(deps) },
       [ACTION.reloadFeatures]: { description: 'Reescanea los .feature; el panel solo se recarga si algo cambió', run: () => reloadFeatures(deps) },
       [ACTION.openReport]: { description: 'Abre el reporte HTML de cucumber de { root } en el navegador de Orca', run: (params, { runtime }) => openReport(deps, runtime, requireAbsolute(ACTION.openReport, params, 'root')) },
+      [ACTION.openEvidence]: { description: 'Abre la carpeta de evidencias de { root, path?, scenario? } (proyecto, carpeta, feature o escenario) en el gestor de archivos', run: (params) => openEvidence(deps, requireAbsolute(ACTION.openEvidence, params, 'root'), typeof params.path === 'string' ? params.path : '', typeof params.scenario === 'string' ? params.scenario : '') },
       [ACTION.stopRun]: { description: 'Detiene (SIGTERM) los cucumber-js vivos de { target } (file o file:line)', run: (params) => stopRun(deps, requireString(ACTION.stopRun, params, 'target')) },
     },
-    carrierTitle: CARRIER_TITLE,
     onError: (error) => deps.notify('Cucumber Features', String(error.message)).catch(() => {}),
   });
 
@@ -72,12 +71,12 @@ export default async function activate(
     ctx.log(`watching ${projects.length} project(s)`);
     return projects;
   };
-  // A finished run rewrote a report: merge it and push the dots to the panel (one reload per run).
+  // A finished run rewrote a report: merge it and push the dots to the panel.
   const syncResults = (projects) =>
     refreshResults(deps, projects, results)
       .then((changed) => changed && channel.sync())
       .catch((error) => ctx.log(`results: ${error.message}`));
-  // ponytail: `ps` every 2 s; the panel only reloads when a run starts or ends.
+  // ponytail: `ps` every 2 s; posts only when a run starts or ends.
   stopRunning = watchRunning(deps, (targets) => {
     running = targets;
     channel.sync();

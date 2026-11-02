@@ -6,7 +6,7 @@
 import { build } from 'esbuild';
 import { scanProject, validateProjects } from '../src/worker/features.js';
 import { seedProjects } from '../src/worker/orca.js';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../', import.meta.url);
@@ -28,7 +28,11 @@ const written = new Set();
 async function emit(file, content) {
   written.add(file);
   const url = new URL(file, dist);
-  if ((await readFile(url, 'utf8').catch(() => null)) !== content) await writeFile(url, content);
+  if ((await readFile(url, 'utf8').catch(() => null)) === content) return;
+  // Temp file + rename: Orca (dev path watcher) never reads a half-written file.
+  const tmp = new URL(`.${file}.tmp`, dist);
+  await writeFile(tmp, content);
+  await rename(tmp, url);
 }
 
 for (const panel of manifest.contributes?.panels ?? []) {
@@ -36,16 +40,13 @@ for (const panel of manifest.contributes?.panels ?? []) {
   const [html, css, js] = await Promise.all([
     read(`src/${name}/index.html`),
     read(`src/${name}/styles.css`),
-    bundle({ entryPoints: [`src/${name}/main.js`], format: 'iife', platform: 'browser', define: { __PROJECTS__: JSON.stringify(projects), __RPC_PATH__: JSON.stringify(fileURLToPath(new URL(RPC_CLI, dist))) } }),
+    bundle({ entryPoints: [`src/${name}/main.js`], format: 'iife', platform: 'browser', define: { __PROJECTS__: JSON.stringify(projects) } }),
   ]);
   // Function replacers: bundle text may contain `$&`-style sequences.
   const page = html
     .replace('<!-- @inline-styles -->', () => `<style>\n${css}</style>`)
     .replace('<!-- @inline-script -->', () => `<script>\n${js.replace(/<\/script/gi, '<\\/script')}</script>`);
-  // Carry over what the worker patched in (terminal titles, carriers): resetting it = two reloads.
-  const old = await readFile(new URL(panel.entry, dist), 'utf8').catch(() => '');
-  const data = old.match(/<script id="panel-data" type="application\/json">([^<]*)<\/script>/)?.[1];
-  await emit(panel.entry, data ? page.replace('<script id="panel-data" type="application/json">{}</script>', () => `<script id="panel-data" type="application/json">${data}</script>`) : page);
+  await emit(panel.entry, page);
 }
 
 if (manifest.main) {
@@ -84,7 +85,8 @@ function loadProjects(list) {
 function checkManifest(m) {
   const errors = [];
   const kebab = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-  const CAPABILITIES = ['workspace:read', 'terminal:send', 'notifications:show', 'storage', 'secrets', 'events:subscribe', 'settings:own'];
+  // v2 names (Orca 1.4.246 capabilities/plugin-capabilities.js) + the v1 aliases it still maps.
+  const CAPABILITIES = ['workspace:read', 'agent:read', 'terminal:send', 'notifications:show', 'storage:own', 'secrets:own', 'settings:own', 'storage', 'secrets', 'events:subscribe'];
   const EVENTS = ['worktree.created', 'worktree.removed', 'agent.status.changed'];
   // Renderer map in Orca 1.4.216 (App-*.js); names are matched without dashes, anything else renders as `plug`.
   const ICONS = 'activity barchart3 bell blocks book bot bug calendar cloud code database filetext flag folder gauge globe hammer layers lightbulb package plug puzzle rocket star terminal wrench zap'.split(' ');
@@ -93,6 +95,8 @@ function checkManifest(m) {
   for (const key of ['id', 'publisher']) if (!kebab.test(m[key] ?? '')) errors.push(`${key} must be kebab-case`);
   if (m.publisher === 'stablyai') errors.push('publisher "stablyai" is reserved');
   if (!/^>=\d+\.\d+\.\d+$/.test(m.engines?.orca ?? '')) errors.push('engines.orca must be ">=x.y.z"');
+  if (m.manifestVersion === 2 && m.main && m.execution !== 'trusted-worker') errors.push('v2 with "main" needs execution "trusted-worker"');
+  if (m.manifestVersion === 2 && (c.commands ?? []).some((cmd) => 'context' in cmd)) errors.push('v2 commands use "when", not "context"');
   for (const cap of m.capabilities ?? []) if (!CAPABILITIES.includes(cap.kind)) errors.push(`unknown capability ${cap.kind}`);
   for (const p of c.panels ?? []) if (!kebab.test(p.id) || !p.entry?.endsWith('.html')) errors.push(`panel ${p.id}: kebab id + .html entry`);
   for (const p of c.panels ?? []) if (p.icon && !ICONS.includes(p.icon.replaceAll('-', '').toLowerCase())) errors.push(`panel ${p.id}: unknown icon "${p.icon}"`);

@@ -1,13 +1,13 @@
 // Orca plugin wire contract (pluginApi 1, Orca 1.4.x). Single source for every
 // string the host matches on — never inline these elsewhere.
 
-export const PANEL_MESSAGE = {
-  request: 'orca-panel-action',
-  result: 'orca-panel-action-result',
+// Host API methods. terminal.sendText is worker-only since Orca 1.4.245 (the panel goes through
+// the SDK's `send-text`); the rest are listed in AGENTS.md.
+// Plugin storage keys (orca.storage, needs storage:own).
+export const STORAGE_KEY = {
+  ui: 'ui', // { query, folded, collapsed, expanded, scrollY }: the panel's view state
 };
 
-// Host API methods (panel + worker). Worker-only methods (storage, secrets,
-// settings, events) are listed in AGENTS.md.
 export const HOST_METHOD = {
   readContext: 'workspace.readContext', // workspace:read
   sendText: 'terminal.sendText', // terminal:send
@@ -28,11 +28,9 @@ export const ACTION = {
   editProjects: 'edit-projects', // {} → { opened }: creates projects.json if missing and opens it in Orca
   reloadFeatures: 'reload-features', // {} → { reloaded }: rescan .feature files, rebuild only if changed
   openReport: 'open-report', // { root } → { url }: serves the project's cucumber HTML report and opens it in Orca's browser
+  openEvidence: 'open-evidence', // { root, path?, scenario? } → { path }: opens that level of <root>/<evidence> (default reports/evidence) in the OS file manager
   stopRun: 'stop-run', // { target } → { killed }: SIGTERM every live cucumber-js process on that file[:line]
 };
-
-// Title of this plugin's carrier terminals (sdk/worker.js): one hidden shell per focused worktree.
-export const CARRIER_TITLE = 'Cucumber (rpc)';
 
 // Pseudo terminal id used by the panel for "run in a new terminal" (never a real host id).
 export const NEW_TERMINAL = '__new__';

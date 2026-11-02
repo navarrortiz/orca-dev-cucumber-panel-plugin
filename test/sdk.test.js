@@ -1,17 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFileSync, writeFile } from 'node:fs';
+import { mkdtemp, writeFile } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { createActionRouter, requireAbsolute } from '../src/sdk/actions.js';
-import { createPanelChannel, readPanelData, toCliCommand } from '../src/sdk/panel.js';
+import { createPanelChannel } from '../src/sdk/panel.js';
 import { createRuntime, OrcaRpc, userDataPath } from '../src/sdk/runtime.js';
 import { createWorkerChannel } from '../src/sdk/worker.js';
 import { actions } from '../src/worker/actions.js';
 
-const tmp = () => promisify(mkdtemp)(join(tmpdir(), 'orca-sdk-'));
 
 /** Fake runtime RPC: answers from a table of handlers, records every call. */
 function fakeRpc(handlers) {
@@ -86,58 +85,64 @@ test('OrcaRpc.shared is a singleton pointing at this platform\'s userData', () =
 
 // ---- worker channel -------------------------------------------------------------------------
 
-test('syncPanelData keeps one carrier in the active worktree and patches titles (minus carriers)', async () => {
-  const dir = await tmp();
-  const panelPath = join(dir, 'panel.html');
-  const page = '<body><script id="panel-data" type="application/json">{}</script><ul></ul></body>';
-  await promisify(writeFile)(panelPath, page);
-  let terminals = [{ handle: 'term_a', title: 'Shell', worktreeId: 'w1' }, { handle: 'term_b', title: '', worktreeId: 'w2' }, { handle: 'term_c', title: '◑ a </script>', agentIdentity: 'claude', worktreeId: 'w2' }];
-  let focused = { displayName: 'w1', branch: 'main', terminals: [{ id: 'term_a' }] };
-  const created = [];
-  const closed = [];
-  const rpc = fakeRpc({
-    'terminal.list': () => ({ terminals }),
-    'worktree.list': () => ({ worktrees: [{ id: 'w3', displayName: 'empty', branch: 'refs/heads/dev' }] }),
-    'terminal.create': (params) => (created.push(params), { terminal: { handle: `car${created.length}` } }),
-    'terminal.close': (params) => (closed.push(params.terminal), {}),
-  });
+test('worker channel: sdk-invoke as command and panel handler; snapshot answered and posted on change', async () => {
+  let terminals = [{ handle: 'term_a', title: 'Shell' }, { handle: 'term_b', title: '' }, { handle: 'term_c', title: '◑ a', agentIdentity: 'claude' }, { handle: 'car1', title: 'X (rpc)' }];
+  const rpc = fakeRpc({ 'terminal.list': () => ({ terminals }) });
   const commands = new Map();
-  const ctx = { commands: { register: (id, fn) => commands.set(id, fn) }, host: { call: async () => focused }, log: () => {} };
-  const channel = createWorkerChannel({ ctx, runtime: createRuntime(rpc), panelPath, actions: {}, carrierTitle: 'X (rpc)', data: () => ({ results: { k: 1 } }) });
+  const handlers = new Map();
+  const posts = [];
+  const hostCalls = [];
+  const ctx = {
+    commands: { register: (id, fn) => commands.set(id, fn) },
+    panels: { handle: (name, fn) => handlers.set(name, fn), post: (...args) => posts.push(args) },
+    host: { call: async (...args) => (hostCalls.push(args), { accepted: true }) },
+    log: () => {},
+  };
+  let results = { k: 1 };
+  const channel = createWorkerChannel({ ctx, runtime: createRuntime(rpc), actions: {}, carrierTitle: 'X (rpc)', data: () => ({ results }) });
   assert.ok(commands.has('sdk-invoke'));
   await channel.start();
   channel.stop();
-  assert.deepEqual(created, [{ worktree: 'id:w1', title: 'X (rpc)', focus: false }]);
-  assert.equal(readFileSync(panelPath, 'utf8'), page.replace('{}', '{"results":{"k":1},"titles":{"term_a":{"title":"Shell"},"term_c":{"title":"a \\u003c/script>","agent":"claude"}},"carriers":["car1"]}'));
-  terminals = [...terminals, { handle: 'car1', title: 'X (rpc)', worktreeId: 'w1' }];
+  const first = { results: { k: 1 }, titles: { term_a: { title: 'Shell' }, term_c: { title: 'a', agent: 'claude' } } };
+  assert.deepEqual(posts, [['sdk-data', first]]);
+  const invoke = handlers.get('sdk-invoke');
+  const panel = { panel: { id: 'p1', surface: 'panel', contributionId: 'features' } };
+  assert.deepEqual(await invoke({ action: 'state' }, panel), first);
+  // Nothing changed (spinner glyph only) → no post; data changed → one post.
+  terminals = terminals.map((t) => (t.handle === 'term_c' ? { ...t, title: '◐ a' } : t));
   await channel.sync();
-  assert.equal(created.length, 1); // carrier alive: nothing created
-  // Focus a worktree without terminals: matched by displayName + branch (both may carry refs/heads/).
-  focused = { displayName: 'empty', branch: 'refs/heads/dev', terminals: [] };
+  assert.equal(posts.length, 1);
+  results = { k: 2 };
   await channel.sync();
-  assert.deepEqual(created.at(-1), { worktree: 'id:w3', title: 'X (rpc)', focus: false });
-  // New worker: adopts existing carriers, closes a duplicate in the same worktree.
-  terminals = [...terminals, { handle: 'car9', title: 'X (rpc)', worktreeId: 'w1' }];
-  focused = null;
-  await channel.sync();
-  assert.deepEqual(closed, ['car9']);
+  assert.deepEqual(posts.at(-1), ['sdk-data', { ...first, results: { k: 2 } }]);
+  // Panel request → built-in send-text → worker-only host call.
+  assert.deepEqual(await invoke({ action: 'send-text', params: { terminalId: 't1', text: 'ls', enter: true } }, panel), { accepted: true });
+  assert.deepEqual(hostCalls, [['terminal.sendText', { terminalId: 't1', text: 'ls', enter: true }]]);
+  await assert.rejects(invoke({ action: 'send-text', params: { text: 'ls' } }, panel), /terminalId/);
 });
 
 // ---- panel channel --------------------------------------------------------------------------
 
-test('panel channel sends to the focused worktree carrier, or reports no-carrier', async () => {
-  const doc = { getElementById: () => ({ textContent: '{"titles":{},"carriers":["car1"]}' }) };
-  const data = readPanelData(doc);
-  const sent = [];
-  let context = { terminals: [{ id: 't1' }, { id: 'car1' }] };
-  const orca = { readContext: async () => context, sendText: async (...args) => (sent.push(args), { accepted: true }) };
-  const channel = createPanelChannel({ orca, cliPath: '/p/rpc.mjs', data });
-  assert.deepEqual(await channel.send('open-file', { root: '/r' }), { sent: true });
-  assert.deepEqual(sent, [['car1', `node /p/rpc.mjs open-file '{"params":{"root":"/r"}}'`, true]]);
-  context = { terminals: [{ id: 't1' }] };
-  assert.deepEqual(await channel.send('open-file', {}), { sent: false, reason: 'no-carrier' });
-  assert.equal(toCliCommand('/p/rpc.mjs', 'a', { params: { c: "x 'y'" } }), `node /p/rpc.mjs a '{"params":{"c":"x '\\''y'\\''"}}'`);
-  assert.deepEqual(readPanelData({ getElementById: () => null }), { titles: {}, carriers: [] });
+test('panel channel: send = plugin.request; subscribe = state now, then pushes (a push beats an older answer)', async () => {
+  let listener;
+  let answer;
+  const requests = [];
+  const orca = {
+    plugin: {
+      on: (event, fn) => (assert.equal(event, 'sdk-data'), (listener = fn)),
+      request: (...args) => (requests.push(args), new Promise((resolve) => (answer = resolve))),
+    },
+  };
+  const channel = createPanelChannel({ orca });
+  const seen = [];
+  const done = channel.subscribe((s) => seen.push(s));
+  assert.deepEqual(requests, [['sdk-invoke', { action: 'state', params: {} }]]);
+  listener({ v: 2 });
+  answer({ v: 1 });
+  await done;
+  assert.deepEqual(seen, [{ v: 2 }]);
+  channel.send('open-file', { root: '/r' });
+  assert.deepEqual(requests.at(-1), ['sdk-invoke', { action: 'open-file', params: { root: '/r' } }]);
 });
 
 // ---- this plugin's actions ------------------------------------------------------------------
@@ -158,6 +163,6 @@ test('run-in-terminal opens a focused terminal in the worktree, cd-ing into root
   });
   const route = createActionRouter(actions, { runtime: createRuntime(rpc) });
   assert.deepEqual(await route({ action: 'run-in-terminal', params: { root: '/repo/pkg e2e/sub', command: 'npx cucumber-js a.feature', title: 'T' } }), { terminalId: 'term_1' });
-  assert.deepEqual(rpc.calls.at(-1), ['terminal.create', { worktree: 'id:w2', command: "cd '/repo/pkg e2e/sub' && npx cucumber-js a.feature", title: 'T', focus: true, presentation: 'focused' }]);
+  assert.deepEqual(rpc.calls.at(-1), ['terminal.create', { worktree: 'id:w2', command: "cd '/repo/pkg e2e/sub' && npx cucumber-js a.feature && orca terminal close --terminal \"$ORCA_TERMINAL_HANDLE\"", title: 'T', focus: true, presentation: 'focused' }]);
   await assert.rejects(route({ action: 'run-in-terminal', params: { root: '/p' } }), /"command"/);
 });

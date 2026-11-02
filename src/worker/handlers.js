@@ -1,4 +1,5 @@
-import { mergeReport, parseReport, runningPids, runningTargets } from './results.js';
+import { dirname, join } from 'node:path';
+import { evidencePath, mergeReport, parseReport, runningPids, runningTargets } from './results.js';
 
 // Business logic of the worker. Takes plain deps (fs + editor + notify), returns
 // plain values — no ctx, no IPC, so it runs under node:test with fakes.
@@ -74,6 +75,27 @@ export async function stopRun({ listProcesses, kill }, target) {
   const pids = byTarget[target] ?? byTarget[target.replace(/:\d+$/, '')] ?? [];
   if (pids.length) kill(pids);
   return { killed: pids.length };
+}
+
+/** Same as the project's evidence hook: "Médico ve su clínica" → "medico-ve-su-clinica". */
+export const slug = (text) =>
+  text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || 'scenario';
+
+/**
+ * Open the evidence folder of the level asked for, in the OS file manager. Layout written by the
+ * project's hook: <evidence>/<folder>/<feature without .feature>/<scenario slug>/NN-<status>-<step>.png.
+ * `path` = folder or feature file relative to root (none = whole project), `scenario` = its name.
+ * Falls back to the nearest existing parent (never ran with evidence, outline names with <params>).
+ */
+export async function openEvidence({ readProjects, openFolder, exists }, root, path = '', scenario = '') {
+  const project = (await readProjects()).find((p) => p.root === root);
+  if (!project) throw new Error(`open-evidence: ${root} no está en projects.json`);
+  if (path.startsWith('/') || path.split(/[\\/]/).includes('..')) throw new Error('open-evidence: "path" must be inside root');
+  const base = evidencePath(project);
+  let dir = join(base, path.replace(/\.feature$/, ''), scenario ? slug(scenario) : '');
+  while (dir !== base && !(await exists(dir))) dir = dirname(dir);
+  await openFolder(dir);
+  return { path: dir };
 }
 
 /** Serve the project's cucumber HTML report and open it in Orca's embedded browser. */

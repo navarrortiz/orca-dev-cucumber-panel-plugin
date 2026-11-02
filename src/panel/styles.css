@@ -1,7 +1,18 @@
-/* Only Orca's allowlisted tokens exist here: --background, --foreground, --card(-foreground),
-   --popover(-foreground), --primary(-foreground), --secondary(-foreground), --muted(-foreground),
-   --accent(-foreground), --destructive(-foreground), --border, --input, --ring, --radius.
-   Sizes mirror Orca's own sidebar panels (Explorer): 13px text, 14px icons, compact rows. */
+/* Orca ≥ 1.4.245 injects its allowlisted tokens prefixed (--orca-background, --orca-popover…): alias
+   them to the short names used below. Sizes mirror Orca's own sidebar panels (Explorer): 13px text,
+   14px icons, compact rows. */
+:root {
+  --background: var(--orca-background); --foreground: var(--orca-foreground);
+  --card: var(--orca-card); --card-foreground: var(--orca-card-foreground);
+  --popover: var(--orca-popover); --popover-foreground: var(--orca-popover-foreground);
+  --primary: var(--orca-primary); --primary-foreground: var(--orca-primary-foreground);
+  --secondary: var(--orca-secondary); --secondary-foreground: var(--orca-secondary-foreground);
+  --muted: var(--orca-muted); --muted-foreground: var(--orca-muted-foreground);
+  --accent: var(--orca-accent); --accent-foreground: var(--orca-accent-foreground);
+  --destructive: var(--orca-destructive); --destructive-foreground: var(--orca-destructive-foreground);
+  --border: var(--orca-border); --input: var(--orca-input); --ring: var(--orca-ring); --radius: var(--orca-radius);
+}
+
 body {
   margin: 0;
   padding: 8px;
@@ -99,7 +110,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .project-name { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-foreground); }
 .project-meta { font-size: 11px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-meta.error { color: var(--destructive); white-space: normal; }
-.run-all[hidden] { display: none; }
+.run-all[hidden], .fold-all[hidden], .unfold-all[hidden] { display: none; }
 .features, .scenarios { margin: 0; padding: 0; list-style: none; }
 .feature-row .row-title { font-weight: 500; }
 /* Last run dot (worker-patched results). Pastel fixed colours: Orca has no green token and
@@ -111,18 +122,14 @@ body { --dot-passed: #7bc99a; --dot-failed: #e07a7a; }
 .feature-row, .scenario-row { position: relative; }
 .feature-row.passed::before, .feature-row.failed::before { content: ''; position: absolute; left: 15px; top: calc(50% + 1px); width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--background); box-sizing: content-box; background: var(--dot-passed); }
 .feature-row.failed::before { background: var(--dot-failed); }
-.feature-row:hover::before, .feature-row:focus-visible::before { border-color: var(--accent); }
-/* Running (live cucumber-js process): the dot becomes a spinner, same spot. */
-.scenario-row.running::before, .feature-row.running::before { content: ''; position: absolute; width: 7px; height: 7px; border-radius: 50%; background: none; border: 1.5px solid var(--muted-foreground); border-top-color: transparent; box-sizing: border-box; animation: spin 0.8s linear infinite; }
-.scenario-row.running::before { left: 17px; top: calc(50% - 3px); }
-.feature-row.running::before { left: 15px; top: calc(50% + 1px); box-shadow: 0 0 0 1.5px var(--background); }
+.feature-row:not(.running):hover::before, .feature-row:not(.running):focus-visible::before { border-color: var(--accent); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .feature-head { display: flex; align-items: center; }
 .features > .feature + .feature { border-top: 1px solid var(--border); }
 /* Folder icon carries the status dot on its corner, like feature rows. */
-.features > .folder > .folder-head:hover .folder-row::before { border-color: color-mix(in srgb, var(--foreground) 6%, var(--muted)); }
-.folder.nested > .folder-head:hover .folder-row::before { border-color: var(--muted); }
-.features > .folder > .folder-head .folder-row::before { border-color: var(--muted); }
+.features > .folder > .folder-head:hover .folder-row:not(.running)::before { border-color: color-mix(in srgb, var(--foreground) 6%, var(--muted)); }
+.folder.nested > .folder-head:hover .folder-row:not(.running)::before { border-color: var(--muted); }
+.features > .folder > .folder-head .folder-row:not(.running)::before { border-color: var(--muted); }
 /* Folder sections: full-bleed grey sticky header band per top-level folder, nested ones indented by --d (depth), hairline-separated rows. */
 .features > .folder { margin: 0 -8px; }
 .tree { margin: 0; padding: 0; list-style: none; }
@@ -146,14 +153,27 @@ body { --dot-passed: #7bc99a; --dot-failed: #e07a7a; }
 .folder.collapsed > .folder-head .chevron { transform: none; }
 .folder-row .folder-icon { color: var(--muted-foreground); }
 .folder-row .row-title { font-weight: 600; }
+.fail-count { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; padding: 0 6px; line-height: 18px; border: 1px solid var(--border); border-radius: 999px; background: var(--background); }
+.fail-count::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--dot-failed); }
+.fail-count[hidden] { display: none; }
+.age { display: inline-flex; align-items: center; gap: 3px; flex: none; font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; line-height: 18px; }
+.age svg { width: 12px; height: 12px; }
+.folder-row .age { padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--background); } /* chip, like its neighbours */
+.age.stale { color: #e0a060; }
+.age[hidden], .scenario-head:not(:hover):not(:focus-within) .age { display: none; } /* scenarios: only on hover */
 .folder-count { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; padding: 0 6px; line-height: 18px; border: 1px solid var(--border); border-radius: 999px; background: var(--background); }
 .folder-head > .icon-button { visibility: hidden; }
 .folder-head:hover > .icon-button, .folder-head:focus-within > .icon-button { visibility: visible; }
 .folder-row.passed::before, .folder-row.failed::before { content: ''; position: absolute; left: 31px; top: calc(50% + 1px); width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--background); box-sizing: content-box; background: var(--dot-passed); }
 .folder-row.failed::before { background: var(--dot-failed); }
 .folder-row { position: relative; }
-.folder-row:hover::before, .folder-row:focus-visible::before { border-color: var(--accent); }
-.folder-row.running::before { content: ''; position: absolute; left: 31px; top: calc(50% + 1px); width: 7px; height: 7px; border-radius: 50%; background: none; border: 1.5px solid var(--muted-foreground); border-top-color: transparent; box-sizing: border-box; box-shadow: 0 0 0 1.5px var(--background); animation: spin 0.8s linear infinite; }
+.folder-row:not(.running):hover::before, .folder-row:not(.running):focus-visible::before { border-color: var(--accent); }
+/* Running (live cucumber-js process): the dot becomes a spinner, same spot (1px bigger each side). After the dot rules: same specificity, must win.
+   --foreground + filled with --background so it reads over the (muted) file/folder icon. */
+.scenario-row.running::before, .feature-row.running::before, .folder-row.running::before { content: ''; position: absolute; width: 9px; height: 9px; border-radius: 50%; background: var(--background); border: 2px solid var(--foreground); border-top-color: transparent; box-sizing: border-box; animation: spin 0.8s linear infinite; }
+.scenario-row.running::before { left: 16px; top: calc(50% - 4px); }
+.feature-row.running::before { left: 14px; top: 50%; box-shadow: 0 0 0 1.5px var(--background); }
+.folder-row.running::before { left: 30px; top: 50%; box-shadow: 0 0 0 1.5px var(--background); }
 .feature-head { gap: 2px; padding: 2px 0; }
 .toggle svg { transition: transform 0.1s; }
 .collapsed > .feature-head .toggle svg { transform: rotate(-90deg); }
@@ -260,5 +280,5 @@ body { --dot-passed: #7bc99a; --dot-failed: #e07a7a; }
 .folder:not(.collapsed) > .folder-head { background: var(--muted); }
 .folder.collapsed > .folder-head { background: transparent; }
 .folder.collapsed > .folder-head:hover { background: var(--muted); }
-.folder:not(.collapsed) > .folder-head .folder-row::before { border-color: var(--muted); }
-.folder.collapsed > .folder-head .folder-row::before { border-color: var(--background); }
+.folder:not(.collapsed) > .folder-head .folder-row:not(.running)::before { border-color: var(--muted); }
+.folder.collapsed > .folder-head .folder-row:not(.running)::before { border-color: var(--background); }

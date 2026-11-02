@@ -1,7 +1,7 @@
 // Presentation only: reads/writes the DOM, exposes user intents as callbacks.
 // No host calls, no business rules.
 import { featuresIn, folderTree, highlightSteps, referenceText } from './lib/format.js';
-import { describeResult, featureResult, folderResult, errorContext, highlightError, isRunning, scenarioResult } from './lib/results.js';
+import { describeResult, shortAge, failedCount, featureResult, folderResult, errorContext, highlightError, isRunning, scenarioResult } from './lib/results.js';
 
 export function createView(doc) {
   const el = (id) => doc.getElementById(id);
@@ -22,14 +22,28 @@ export function createView(doc) {
     menuItems: el('terminal-menu-items'),
     menuItem: el('menu-item-template'),
   };
-  const handlers = { run: () => {}, stop: () => {}, more: () => {}, toggle: () => {}, report: () => {}, copy: () => {} };
+  const handlers = { fold: () => {}, run: () => {}, stop: () => {}, more: () => {}, toggle: () => {}, report: () => {}, copy: () => {} };
   const clone = (tpl) => tpl.content.firstElementChild.cloneNode(true);
-  /** Last-run dot on a row (CSS .passed/.failed) + its date in the tooltip. */
+  /** Last-run dot on a row (CSS .passed/.failed) + its date in the tooltip + "⏱ 3h" age badge (.stale past 5 days). */
   function mark(row, result, running) {
     if (running) row.classList.add('running');
     if (!result) return;
     row.classList.add(result.status);
     row.title += ` · ${describeResult(result)}`;
+    const age = row.querySelector('.age');
+    const { text, stale } = shortAge(result.last);
+    age.hidden = false;
+    age.classList.toggle('stale', stale);
+    age.lastChild.textContent = text;
+    age.title = `Última ejecución: ${new Date(result.last).toLocaleString('es')}`;
+  }
+
+  /** "● 3/12" pill, only while some scenario's last run failed. */
+  function failBadge(row, { failed, total }, showZero = false) {
+    const badge = row.querySelector('.fail-count');
+    badge.hidden = !failed && !showZero;
+    badge.textContent = `${failed}/${total}`;
+    badge.title = `${failed} de ${total} ${total === 1 ? 'escenario falló' : 'escenarios fallaron'} en la última ejecución`;
   }
 
   // textContent only: names, tags and paths come from the user's .feature files.
@@ -145,6 +159,7 @@ export function createView(doc) {
     row.setAttribute('aria-expanded', String(!isCollapsed));
     row.addEventListener('click', () => handlers.toggle(key)); // not busy-gated: view-only
     mark(row, featureResult(results, project.root, feature.file, feature.scenarios), live);
+    failBadge(row, failedCount(results, project.root, [feature]));
     const toggle = item.querySelector('.toggle');
     toggle.title = isCollapsed ? 'Expandir escenarios' : 'Colapsar escenarios';
     toggle.setAttribute('aria-expanded', String(!isCollapsed));
@@ -154,14 +169,24 @@ export function createView(doc) {
     return item;
   }
 
-  function renderProject(project, busy, collapsed, expanded, results, running, query) {
+  function renderProject(project, busy, folded, collapsed, expanded, results, running, query) {
     const item = clone(ui.projectTpl);
+    // "Colapsar todo" flips the default of every folder/feature in the project: a key in `collapsed` then means open.
+    const fold = folded.has(project.root) && !query;
+    const own = collapsed;
+    collapsed = { has: (key) => own.has(key) !== fold };
     const count = project.features.reduce((n, f) => n + f.scenarios.length, 0);
     item.querySelector('.project-name').textContent = project.name;
     item.querySelector('.project-meta').textContent = project.error ?? `${project.features.length} features · ${count} escenarios`;
     item.querySelector('.project-meta').classList.toggle('error', Boolean(project.error));
+    if (!project.error) failBadge(item, failedCount(results, project.root, project.features), true);
     const runAll = item.querySelector('.run-all');
     runAll.hidden = Boolean(project.error);
+    for (const [cls, value] of [['.fold-all', true], ['.unfold-all', false]]) {
+      const button = item.querySelector(cls);
+      button.hidden = Boolean(project.error);
+      button.addEventListener('click', () => handlers.fold(project.root, value)); // view-only
+    }
     wire(runAll, 'run', { command: project.command, target: project.dir, label: `${project.name} (todo)`, root: project.root }, busy, `Ejecutar todo ${project.dir}`);
     const tree = folderTree(project.features, project.dir);
     item.querySelector('.features').replaceChildren(
@@ -190,6 +215,7 @@ export function createView(doc) {
     badge.textContent = `${features.length} · ${count}`;
     badge.title = `${features.length} ${features.length === 1 ? 'feature' : 'features'} · ${count} ${count === 1 ? 'escenario' : 'escenarios'}`;
     row.addEventListener('click', () => handlers.toggle(key));
+    failBadge(row, failedCount(results, project.root, features));
     mark(row, folderResult(results, project.root, features), features.some((f) => isRunning(running, f.file, f.scenarios)));
     const payload = { command: project.command, target: node.path, label: node.path, root: project.root };
     wire(item.querySelector('.run-folder'), 'run', payload, busy, `Ejecutar ${node.path}`);
@@ -202,11 +228,12 @@ export function createView(doc) {
   }
 
   return {
-    render({ summary, projects, visible, query, status, busy, collapsed, expanded, results, running }) {
+    render({ summary, projects, visible, query, status, busy, folded, collapsed, expanded, results, running }) {
       ui.summary.textContent = summary;
+      if (ui.query.value !== query) ui.query.value = query; // restored after a reload
       ui.status.textContent = status;
       ui.refresh.disabled = ui.editProjects.disabled = busy;
-      ui.list.replaceChildren(...visible.map((p) => renderProject(p, busy, collapsed, expanded, results, running, query)));
+      ui.list.replaceChildren(...visible.map((p) => renderProject(p, busy, folded, collapsed, expanded, results, running, query)));
       ui.empty.textContent = visible.length ? '' : query ? 'Sin resultados' : projects.length ? '' : 'Aún no hay proyectos';
     },
     onRefresh: (fn) => ui.refresh.addEventListener('click', fn),
@@ -223,6 +250,8 @@ export function createView(doc) {
     onMore: (fn) => (handlers.more = fn),
     /** fn(key): a feature's chevron (collapse scenarios) or a scenario's (show definition) */
     onToggle: (fn) => (handlers.toggle = fn),
+    /** fn(root, fold): a project's "Colapsar todo" (true) / "Expandir todo" (false) */
+    onFold: (fn) => (handlers.fold = fn),
 
     /** Popup at viewport `point` over [{ id, label, hint, icon }]; resolves the picked id, or null if dismissed. */
     choose(terminals, point, label) {

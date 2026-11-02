@@ -1,24 +1,26 @@
 {
-  "manifestVersion": 1,
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
   "id": "cucumber-features",
   "publisher": "tony",
   "name": "Cucumber Features",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Browse Cucumber features and scenarios and run them in a terminal.",
-  "engines": { "orca": ">=1.4.0" },
+  "engines": { "orca": ">=1.4.245" },
   "pluginApi": 1,
   "main": "worker.mjs",
   "contributes": {
     "panels": [{ "id": "features", "title": "E2E Cucumber", "icon": "bug", "entry": "panel.html" }],
     "commands": [
-      { "id": "edit-projects", "title": "Cucumber: Editar proyectos", "context": "global" },
-      { "id": "reload-features", "title": "Cucumber: Recargar features", "context": "global" },
-      { "id": "sdk-invoke", "title": "Cucumber: SDK (interno)", "context": "global" }
+      { "id": "edit-projects", "title": "Cucumber: Editar proyectos", "when": "global" },
+      { "id": "reload-features", "title": "Cucumber: Recargar features", "when": "global" },
+      { "id": "sdk-invoke", "title": "Cucumber: SDK (interno)", "when": "global" }
     ]
   },
   "capabilities": [
     { "kind": "workspace:read" },
     { "kind": "terminal:send" },
-    { "kind": "notifications:show" }
+    { "kind": "notifications:show" },
+    { "kind": "storage:own" }
   ]
 }

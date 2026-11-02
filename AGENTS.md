@@ -5,6 +5,11 @@
 runs one (feature, `file:line` scenario or whole folder) in a terminal of the focused worktree.
 Split into testable layers. Scaffolded from `orca-saved-prompts-panel-plugin`.
 
+> **Orca 1.4.245+ changed the panel runtime** (verified on 1.4.246, see
+> [Panel runtime](#panel-runtime)): panels are isolated `<webview>` frames with an injected
+> `window.orca`; the old `postMessage` bridge is gone, `terminal.sendText` is worker-only and the
+> design tokens are prefixed `--orca-*`. Sections not marked 1.4.246 still describe 1.4.216.
+>
 > Everything about the Orca API below was discovered by reading the Orca **1.4.216** app bundle
 > (`resources/app.asar` → `out/shared/plugins/*.js`, `out/main/plugin-host-entry.js`). Orca marks
 > the whole plugin system **EXPERIMENTAL** ("no compatibility promises until pluginApi v1
@@ -54,25 +59,28 @@ projects.json           your projects [{name, root, features?, command}] (gitign
                         to every feature/scenario ⋯ menu (e.g. headed: `E2E_HEADLESS=false … {target}`).
                         Optional `report` (default `reports/last-run.json`): cucumber JSON output, see
                         "Last run dots".
+                        Optional `evidence` (default `reports/evidence`): per-step screenshots folder,
+                        opened by ⋯ → "Abrir carpeta de evidencias" (`open-evidence`, OS file manager).
+                        The project writes it (e.g. an `AfterStep` screenshot hook behind
+                        `E2E_EVIDENCE=true`, run via a `commands` entry "Ejecutar con evidencia").
 results.json            last pass/fail per scenario, merged from the reports (gitignored; worker-owned)
 src/shared/protocol.js  plugin wire strings: panel messages, host methods, commands, ACTION names,
-                        carrier title, limits, {target}
+                        limits, {target}
 src/shared/shell.js     shellQuote, shared by panel, worker and SDK
 src/sdk/                messaging SDK, plugin-agnostic (see "Messaging SDK"):
-  protocol.js           INVOKE_COMMAND (`sdk-invoke`), RPC_METHOD, PANEL_DATA_ID, built-in actions
+  protocol.js           INVOKE_COMMAND (`sdk-invoke`), PANEL_EVENT (`sdk-data`), RPC_METHOD, built-in actions
   runtime.js            OrcaRpc (socket client, singleton) + createRuntime (typed verbs)
   actions.js            createActionRouter + param validators
-  worker.js             createWorkerChannel: sdk-invoke, carrier terminals, panel-data patching
-  panel.js              createPanelChannel/readPanelData: send an action from the panel, no popup
+  worker.js             createWorkerChannel: sdk-invoke (command + panel handler), snapshot push (panels.post)
+  panel.js              createPanelChannel: send(action) + subscribe(snapshot)
   cli.js                → dist/rpc.mjs: `node rpc.mjs <action> '<json>'`, --method, --restart
 src/panel/              one folder per panel; folder name = entry name ("panel.html" ← src/panel/)
   index.html            markup with <!-- @inline-styles --> / <!-- @inline-script --> placeholders
   styles.css            uses Orca design tokens only
   main.js               composition root + controller (state, intents → host calls)
   view.js               DOM only: render(state), expose intents as callbacks
-  orca.js               domain facade (readContext/sendText) over the bridge
-  bridge.js             postMessage request/response transport (timeouts, errors)
-  lib/                  pure functions — no DOM, no bridge (filter, shell quoting, command, Gherkin
+  orca.js               domain facade (readContext/sendText/send/onData/loadUi/saveUi) over window.orca
+  lib/                  pure functions — no DOM, no window.orca (filter, shell quoting, command, Gherkin
                         highlighting for the scenario definition card, last-run dots)
 src/worker/
   main.js               activate(ctx): palette commands (edit-projects, reload-features), watchers,
@@ -86,7 +94,7 @@ src/worker/
   orca.js               deps: host notify, fs watchers, stale check, `orca file open` via the CLI
                         (projects.json)
 scripts/build.mjs       scan projects + esbuild bundle + inline into single-file panels + manifest check
-test/                   node:test — pure logic, bridge, parser, worker handlers, SDK (fake socket +
+test/                   node:test — pure logic, orca facade, parser, worker handlers, SDK (fake socket +
                         fake RPC, never the real Orca), manifest↔code contract
 ```
 
@@ -111,37 +119,38 @@ profile that should count. Flow: the worker watches the report's folder → `ref
 (`handlers.js`) parses it (`results.js`: failed if any step/hook is failed/ambiguous/undefined/pending,
 passed if the rest passed, skipped-only = unknown; outline examples share a name, failed wins) and
 **merges** it into `results.json` next to `projects.json` (cucumber overwrites the report on every
-run, even a single scenario) → `channel.sync()` patches `{ results }` into the panel data (one panel
-reload per finished run) → `lib/results.js` picks the dot: scenario = its own result; feature = red if
+run, even a single scenario) → `channel.sync()` posts the snapshot with `{ results }` to the panel (no
+reload) → `lib/results.js` picks the dot: scenario = its own result; feature = red if
 any known scenario failed, green if every known one passed, none if none ran. Keyed by
-`root|file|scenario name`, not line, so editing a .feature keeps the dots. Date in the row tooltip.
+`root|file|scenario name`, not line, so editing a .feature keeps the dots. Date in the row tooltip; a `⏱ 3h` age badge (`shortAge`: mi/h/d/w/m/y since the latest run, orange past 5 days) sits on folders and features, on scenarios only on hover.
 A failed scenario stores the first failing step/hook + its `error_message` (≤ 1500 chars); the
 panel shows it at the bottom of the scenario card (⚠ button on the row opens it; outline examples
 are prefixed with their filled-in name). Caveats: results only flow while the worker lives (it catches up at start); a Ctrl+C'd run writes no
-report; the SDK's `data: () => object` option is what carries `results` next to titles/carriers.
+report; the SDK's `data: () => object` option is what carries `results` next to titles.
 
 **Running spinner / ■ stop:** `watchRunning` (`handlers.js`) polls `ps -eo pid=,args=` every 2 s;
-`runningTargets` keeps the `*.feature[:line]` tokens of lines mentioning `cucumber-js` (any terminal,
-not only the panel's) and publishes them as `running` in the panel data when the set changes. A
-running row shows a spinner instead of the dot and its ▷ becomes ■ → `stop-run`. Not on Windows
-(no `ps`). A whole-folder run (`… cucumber-js features`) has no `.feature` token and shows nothing.
+`runningTargets` keeps the `*.feature[:line]` and folder (`features/auth`, needs a `/`) tokens after
+`cucumber-js` (any terminal, not only the panel's) and publishes them as `running` in the panel data
+when the set changes. A running row shows a spinner instead of the dot and its ▷ becomes ■ →
+`stop-run`; a running folder spins with every feature inside it. Not on Windows (no `ps`). The bare
+features root (`… cucumber-js features`) has no `/` and shows nothing.
 
 ### Dependency rule
 
 ```
 main.js (controller) ──► view.js        (presentation)
         │           └──► lib/*          (pure logic)
-        └──► orca.js (facade) ──► bridge.js (transport) ──► shared/protocol.js
+        └──► orca.js (facade over window.orca) ──► sdk/panel.js, shared/protocol.js
 ```
 
 Worker: `main.js` → `handlers.js` → `orca.js` → `ctx.host`, and `main.js` → `sdk/worker.js` →
 `actions.js` → `sdk/runtime.js` (runtime socket). Panel: `main.js` → `sdk/panel.js` → `orca.js`.
 `src/sdk/` imports only `shared/shell.js` and itself: no plugin code, so it can be copied as is.
 
-- Arrows point one way. `view` never imports `orca`/`bridge`; `lib` imports nothing but
-  `shared`; `bridge` knows nothing about which actions exist.
+- Arrows point one way. `view` never imports `orca`; `lib` imports nothing but
+  `shared`; `sdk/panel.js` knows nothing about which actions exist.
 - Only `main.js` touches `window`/`document` globals — everything else receives them
-  (`createBridge(win)`, `createView(doc)`), which is what makes the tests possible.
+  (`createOrcaClient(window.orca)`, `createView(doc)`), which is what makes the tests possible.
 - Worker mirrors it: `main.js` (wiring) → `handlers.js` (logic) → `orca.js` (facade) → `ctx.host`.
 
 ## Orca plugin API (pluginApi 1, Orca 1.4.x)
@@ -222,30 +231,32 @@ re-checks the capability on every call.
 
 ### Panel runtime
 
-- Rendered as `srcdoc` in `<iframe sandbox="allow-scripts">` → **opaque origin**.
-- Orca prepends a shell (`buildPluginPanelShellHtml`): doctype, `<html class="light|dark">`, a
-  CSP meta, a `:root{…}` block with design tokens, and a script that blocks navigation, makes
-  `window.open` return `null`, cancels **every** `<a href>` click and form submit, and answers
-  the watchdog ping. Your HTML is appended after `</head>` → start your file at `<body>`.
-- CSP: `default-src 'none'; connect-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'`.
-  ⇒ **No external `.js`/`.css`/images/fonts, no `fetch`/WebSocket.** Hence the build inlines
-  everything into one HTML file. Images/fonts only as `data:` URIs.
-- Design tokens available as CSS vars: `--background --foreground --card --card-foreground
-  --popover --popover-foreground --primary --primary-foreground --secondary
-  --secondary-foreground --muted --muted-foreground --accent --accent-foreground --destructive
-  --destructive-foreground --border --input --ring --radius`. Nothing else is public.
-- Bridge protocol (see `src/panel/bridge.js`):
-  - request → `window.parent.postMessage({type:'orca-panel-action', requestId ≤128, action, params}, '*')`
-  - reply ← `{type:'orca-panel-action-result', requestId, ok:true, value}` or
-    `{…, ok:false, errorCode, error}`. Codes seen: `invalid_request`, `rate_limited`,
-    `action_failed`, `panel_forbidden`, plus capability denials.
-- Budgets per plugin (shared by all its panels): message ≤ 64 KB, **30 messages / 10 s**.
-- Watchdog: ping every 10 s, 5 s to pong (the shell does it). A busy-looping panel is shown as
-  errored — keep the main thread free.
-- `localStorage`/cookies are unusable in an opaque origin **(unverified, standard web behavior)**.
-  Panel has no persistence of its own; persist via the worker.
-- **No host-provided panel ↔ worker channel exists.** The panel can't call worker commands or read
-  storage through the bridge. The workaround this repo uses is in [Messaging SDK](#messaging-sdk-panel--worker--cli).
+**Orca 1.4.246** (read from `resources/app.asar.unpacked/out/shared/plugins/frames/` and
+`workers/`; the 1.4.216 `srcdoc` iframe + `postMessage({type:'orca-panel-action'})` bridge no
+longer exists — requests just time out):
+
+- A `<webview>` guest served from `orca-plugin-frame://<sha256(pluginKey)[0..16]>/<entry>`, own
+  partition `persist:orca-plugin-<key>`. Orca writes doctype, `<html class="light|dark">`, a
+  `<style id="orca-design-tokens">` and its API script, then your HTML → still start at `<body>`.
+- CSP now allows `'self'` (sibling `.js`/`.css`, `fetch('./x.json')`), `'unsafe-inline'`,
+  `img-src 'self' data: blob:`. Inlining is no longer required (the build still does it).
+- `window.orca` (frozen, present before your scripts; calls queue, no ready promise):
+  `orca.host.call(method, params)`, `orca.plugin.request(name, input, {timeoutMs ≤ 120000})` →
+  the worker's `orca.panels.handle(name, (input, {panel}) => out)`, `orca.plugin.on(event, fn)` ←
+  worker `orca.panels.post(event, payload)`, `orca.on('workspace.changed' | 'theme' | …, fn)`,
+  `orca.storage/settings/secrets.*`, `orca.shell.openExternal(url)` (needs a user gesture).
+- **`terminal.sendText` is worker-only**; panels keep `workspace.readContext` (terminals now carry
+  `title?`), `notifications.show`, storage/settings/secrets.
+- Design tokens are the same 20 names, prefixed: `--orca-background`, `--orca-popover`, … The
+  unprefixed `--background` etc. are gone (menus went transparent): `styles.css` aliases them.
+- Budgets: message ≤ 64 KB, **120 messages / 10 s**; worker results ≤ 1 MiB, posts ≤ 256 KiB,
+  200 posts / 10 s. Watchdog: ping every 10 s, 5 s to pong.
+- Manifest v1 still loads; this repo uses **v2**: `manifestVersion: 2`, `execution:
+  "trusted-worker"` (required with `main`), commands `when` instead of `context`, capabilities
+  `storage:own`/`secrets:own` (v1 `storage`/`secrets` are mapped). `engines.orca >=1.4.245`.
+- The panel's view state (search, folds, scroll) lives in `orca.storage` (`STORAGE_KEY.ui`), so it
+  survives the reload a rebuild causes and worker restarts.
+- New CLI: `orca plugin dev watch|reload|request|inspect <dir>`, `orca plugin restart|logs <key>`.
 
 ### Worker runtime
 
@@ -296,17 +307,16 @@ CLI, not as the pluginApi. Re-verify after upgrading.
 that the panel, a shell, or any local process can call with JSON params. One manifest command
 (`sdk-invoke`) routes them all, so adding an action never touches the manifest or the consent.
 
-### Channel map (1.4.216)
+### Channel map (1.4.246)
 
 | Route | How | Notes |
 |---|---|---|
+| panel → worker | `orca.send(action, params)` (`src/panel/orca.js`) → `orca.plugin.request('sdk-invoke', { action, params })` → worker `orca.panels.handle('sdk-invoke')` | Returns the action's value; Orca starts the worker if needed |
+| panel → terminal | SDK built-in `send-text { terminalId, text, enter }` → worker `terminal.sendText` | Host only accepts terminals of the active worktree |
 | any local process → worker | `plugins.invokeCommand` → `sdk-invoke { action, params }`, sync result | `node dist/rpc.mjs <action> '{"params":{…}}'` |
-| worker → Orca | `createRuntime()` verbs / `OrcaRpc.shared.call(...)` | No CLI on PATH needed, no capability needed |
-| panel → worker | `createPanelChannel().send(action, params)`: `terminal.sendText` types the `rpc.mjs` line into the worker's **carrier** terminal | Only egress of the sandbox. Fire-and-forget (the panel can't read terminals). Needs `node` on PATH |
-| worker → panel | rewrite `dist/panel.html`: full rebuild (features) or `patchPanelData` on the `<script id="panel-data">` placeholder (`{ titles, carriers }`) | No push; every write reloads the panel (search box resets), so the build and `patchPanelData` only write on real changes |
-| panel ↔ socket/ws/http directly | — | CSP `connect-src 'none'`, `img-src data:` |
+| worker → Orca | `createRuntime()` verbs / `OrcaRpc.shared.call(...)` | No plugin-API equivalent for terminal.create, files.open, browser.tabCreate |
+| worker → panel | `orca.panels.post('sdk-data', { titles, results, running })` when the snapshot changed; the panel gets the current one with the built-in `state` action on load (`channel.subscribe`) | No reload. Only a features rebuild rewrites `dist/panel.html` (temp file + rename) and reloads it |
 
-`plugins.panelAction` also exists but needs the session token Orca issues to its own panel host.
 
 ### The runtime RPC socket
 
@@ -362,8 +372,8 @@ const actions = {
     run: async (params, { runtime, host, log }) => runtime.openFile(requireAbsolute('open-file', params, 'path')),
   },
 };
-const channel = createWorkerChannel({ ctx, runtime: createRuntime(OrcaRpc.shared), panelPath, actions,
-  carrierTitle: 'My plugin (rpc)', onError: (e) => notify(e.message) });
+const channel = createWorkerChannel({ ctx, runtime: createRuntime(OrcaRpc.shared), actions,
+  data: () => ({ results }), onError: (e) => notify(e.message) });
 channel.start();   // activate(); channel.stop() in deactivate()
 ```
 
@@ -371,6 +381,9 @@ channel.start();   // activate(); channel.stop() in deactivate()
 - `run(params, ctx)`: params come from any local process ⇒ validate (`requireString`,
   `requireAbsolute`). Return structured-clone data. A throw reaches the caller and `onError`.
 - Built-in actions: `ping` → `{ pong, at }`, `actions` → `[{ name, description }]`.
+- `data: () => object` (option): merged into the snapshot `{ titles, …data() }`; call `channel.sync()`
+  when it changes (posts only if the JSON differs). Built-in `state` answers the snapshot,
+  `send-text { terminalId, text, enter? }` types into a terminal (worker-only host method).
 - `createRuntime(rpc)` verbs: `worktrees()`, `worktreeOf(dir)` (deepest containing `dir`),
   `terminals()`, `createTerminal({ worktreeId, command?, title, focus = true })`,
   `closeTerminal(handle)`, `openFile(absolutePath)`, `invoke(pluginKey, commandId, args)`,
@@ -381,25 +394,11 @@ channel.start();   // activate(); channel.stop() in deactivate()
 **Panel** (`src/sdk/panel.js`):
 
 ```js
-import { createPanelChannel, readPanelData } from '../sdk/panel.js';
-const data = readPanelData(document);                 // { titles, carriers } patched by the worker
-const channel = createPanelChannel({ orca, cliPath: __RPC_PATH__, data });
-const r = await channel.send('open-file', { path }); // { sent: true } | { sent: false, reason: 'no-carrier' | 'rejected' }
-if (!r.sent) /* ask for a terminal and type channel.command('open-file', { path }) there */;
-```
-
-`channel.isCarrier(id)` filters carriers out of terminal pickers. The panel needs `<script
-id="panel-data" type="application/json">{}</script>` in its HTML and `__RPC_PATH__` defined by the
-build (absolute path of `dist/rpc.mjs`).
-
-**CLI** (`src/sdk/cli.js` → `dist/rpc.mjs`, `__PLUGIN_KEY__` baked in):
-
-```bash
-node dist/rpc.mjs actions                       # list actions
-node dist/rpc.mjs ping
-node dist/rpc.mjs open-file '{"params":{"root":"/abs/project","file":"features/a.feature"}}'
-node dist/rpc.mjs --method terminal.list '{}'   # any runtime RPC
-node dist/rpc.mjs --restart                     # disable + enable the plugin = fresh worker (pnpm reload-worker)
+import { createPanelChannel } from '../sdk/panel.js';
+const channel = createPanelChannel({ orca: window.orca });
+channel.subscribe((snapshot) => render(snapshot));        // { titles, …data() }: now + every push
+const value = await channel.send('open-file', { path });  // action's return value; rejects on failure
+await channel.send('send-text', { terminalId, text, enter: true });   // SDK built-in
 ```
 
 ### This plugin's actions (`src/worker/actions.js`)
@@ -411,49 +410,35 @@ node dist/rpc.mjs --restart                     # disable + enable the plugin = 
 | `edit-projects` | `{}` | `{ opened }` | header ⚙ button (same as the palette command; wired in `main.js`) |
 | `reload-features` | `{}` | `{ reloaded }` | header refresh button (wired in `main.js`: needs the worker's rebuild) |
 | `open-report` | `{ root }` | `{ url }` | ⋯ → "Ver reporte HTML": the worker serves `<root>/<html>` (default `reports/cucumber-report.html`) from a loopback `node:http` server (Orca's browser refuses `file://`) and opens it with `browser.tabCreate` |
+| `open-evidence` | `{ root, path?, scenario? }` | `{ path }` | ⋯ → "Abrir carpeta de evidencias" at the row's level: `<evidence>/<folder>` / `<feature without .feature>` / `…/<scenario slug>` (layout of the project hook; nearest existing parent if missing, `mkdir -p` the root) and opens it detached with `xdg-open` / `open` / `explorer` |
 | `stop-run` | `{ target }` (`file` or `file:line`) | `{ killed }` | ■ on a running row: SIGTERM (then SIGKILL after 3 s) every live `cucumber-js` whose command line names the target |
 
 `run-in-terminal` resolves the deepest Orca worktree containing `root` (`path:<subdir>` is **not**
 a valid selector, `id:<worktree.id>` is) and runs `terminal.create { worktree, command: "cd <root>
-&& <command>", title, focus: true, presentation: 'focused' }`. `open-file` calls `files.open {
+&& <command> && orca terminal close --terminal "$ORCA_TERMINAL_HANDLE"", title, focus: true, presentation: 'focused' }`: a green run closes its tab, a red one stays open. `open-file` calls `files.open {
 worktree: id:…, relativePath }` (relative to the worktree). Typing `orca file open <path>` instead
 broke: the CLI wants `--path` and resolves against the terminal's cwd, maybe another worktree.
 
-### Carrier terminals (how the panel sends without a popup)
+### Carrier terminals (removed)
 
-The panel can't create terminals, only type into one, and the host's `terminal.sendText` (panel
-**and** worker) **only accepts terminals of the active worktree** (`terminal is outside the active
-worktree`). So the worker channel keeps one background shell titled `carrierTitle` (`Cucumber
-(rpc)`, `focus: false`) **per worktree the user focuses** and publishes their ids in the panel data.
-The panel channel uses the one listed in its `readContext`. Every 15 s poll (`syncPanelData`):
-
-- Carriers are rebuilt from `terminal.list` by title: adopts a previous worker's (Orca doesn't
-  reliably call `deactivate`), forgets closed ones, closes duplicates in one worktree.
-- Active worktree (`activeWorktreeId`: a readContext terminal id mapped through `terminal.list`,
-  else displayName + branch against `worktree.list`; both may carry `refs/heads/`) without a
-  carrier → create one.
-- A carrier is reused for every action. An earlier version replaced it after each use (fresh
-  shell), but the new id changed the panel data ⇒ one panel reload per click.
-- No carrier in the focused worktree yet (worker not running, worktree focused < 15 s ago):
-  `send` returns `no-carrier`; this panel then asks for a terminal and types the line there.
-
-Side effect: every worktree you focus while the worker runs gets a `Cucumber (rpc)` tab.
-Tests must never reach the real socket: `activate(ctx, projectsPath, panelPath, rpc)` and every
-SDK factory take the RPC; an earlier version leaked carrier tabs into real worktrees on every
-`pnpm test`.
+Up to Orca 1.4.216 the panel could only type into terminals, so the worker kept a hidden
+`Orca plugins (rpc)` shell per worktree and the panel typed `node rpc.mjs …` lines into it. Since
+1.4.245 `orca.plugin.request` replaces that. Leftover tabs with that title (`CARRIER_TITLE`) are
+kept out of titles and pickers; close them by hand. Tests must never reach the real socket:
+`activate(ctx, projectsPath, panelPath, rpc)` and every SDK factory take the RPC.
 
 ### Terminal titles in the popup
 
 `workspace.readContext` gives terminal ids only. The worker polls `terminal.list` (all worktrees,
-`{ handle, title, agentIdentity? }`) every 15 s and, when the `{ id: { title, agent? } }` map changed (leading status glyphs such as `◑ ✳` stripped and entries sorted by handle, else spinner frames and `terminal.list` order reload the panel),
-patches it into the `panel-data` placeholder (`patchPanelData`; `<` escaped as `\u003c`). The panel
-reads it at load (`describeTerminals(terminals, titles)`), falling back to `Terminal N`, and picks
+`{ handle, title, agentIdentity? }`) every 15 s and posts the `{ id: { title, agent? } }` map in the
+snapshot when it changed (leading status glyphs such as `◑ ✳` stripped and entries sorted by handle,
+else spinner frames and `terminal.list` order would post every poll). The panel uses the latest
+(`describeTerminals(terminals, titles)`), falling back to `Terminal N`, and picks
 the popup icon from the agent (`terminalIcon`: own mark for claude/codex/gemini, `bot` for any other
 identity, `terminal` for a shell). `agentIdentity` is Orca's own detection and is best effort: a
-session it didn't recognise shows as a plain terminal. Caveats: the worker only
-exists after the first command (palette, or any SDK action) — until then the popup shows
-positions; every title change reloads the panel. The build carries the current placeholder JSON
-over and writes only files whose content changed, so a rescan with nothing new reloads nothing.
+session it didn't recognise shows as a plain terminal. The panel's `state` request starts the
+worker. The build writes only files whose content changed, so a rescan with nothing new reloads
+nothing.
 
 ### Worker reload gotcha
 
@@ -467,12 +452,12 @@ re-enabled plugin stays `idle` until its first command). `plugins.refresh` is IP
 ### Reusing the SDK in another plugin
 
 1. Copy `src/sdk/` and `src/shared/shell.js`.
-2. Manifest: `{ "id": "sdk-invoke", "title": "<Plugin>: SDK (interno)", "context": "global" }`
-   under `contributes.commands`, plus `main`, and `workspace:read` + `terminal:send` capabilities.
-3. Build: bundle `src/sdk/cli.js` to `dist/rpc.mjs` with `define: { __PLUGIN_KEY__ }`, and define
-   `__RPC_PATH__` (absolute path of it) for the panel. See `scripts/build.mjs`.
-4. Panel HTML: `<script id="panel-data" type="application/json">{}</script>`.
-5. Worker: `createWorkerChannel({ … })` + `start()`; panel: `createPanelChannel({ … })`.
+2. Manifest (v2): `{ "id": "sdk-invoke", "title": "<Plugin>: SDK (interno)", "when": "global" }`
+   under `contributes.commands`, plus `main`, `execution: "trusted-worker"`,
+   `engines.orca >= 1.4.245`, and `workspace:read` + `terminal:send` capabilities.
+3. Build: bundle `src/sdk/cli.js` to `dist/rpc.mjs` with `define: { __PLUGIN_KEY__ }`. See `scripts/build.mjs`.
+4. Worker: `createWorkerChannel({ … })` + `start()`; panel: `createPanelChannel({ orca: window.orca })`.
+5. CSS: alias the `--orca-*` tokens (top of `src/panel/styles.css`).
 
 `orca-saved-prompts-panel-plugin` uses this same SDK (copied as is): port SDK changes there too.
 
@@ -499,8 +484,8 @@ this reason. Don't abuse it; keep side effects obvious and documented.
   module other than the composition root.
 - **Never `innerHTML` host data.** Terminal ids, branch names and paths come from outside — use
   `textContent`, `new Option()`, `replaceChildren()`.
-- **Fail fast on host limits** (`LIMITS` in protocol.js) before spending the 30-msg budget, and
-  keep bridge timeouts — the host doesn't always answer.
+- **Fail fast on host limits** (`LIMITS` in protocol.js) before spending the 120-msg budget, and
+  surface rejected `orca.*` calls in the status line.
 - **Honest UI.** `readContext()` returning `null` means "no focused worktree", not an error; a
   rejected call is an error — render them differently. Report `accepted`/`delivered: false`.
 - **Least privilege.** Every capability added is a new consent prompt and more attack surface.
@@ -515,7 +500,7 @@ this reason. Don't abuse it; keep side effects obvious and documented.
 - **New action (panel / CLI → worker)**: add `{ description, run(params, { runtime }) }` to
   `src/worker/actions.js` under a name in `ACTION` (protocol.js), validate params, test it in
   `test/sdk.test.js` with `fakeRpc`. No manifest change. Call it from the panel with
-  `sendAction(ACTION.x, params, point, done)` or from a shell with `node dist/rpc.mjs x '{"params":…}'`.
+  `sendAction(ACTION.x, params, done)` or from a shell with `node dist/rpc.mjs x '{"params":…}'`.
 - **New worker command** (command palette): add to `contributes.commands` (no `action`), register
   it in `src/worker/main.js`, logic in `handlers.js`, test it.
 - **Alias a built-in action**: `contributes.commands` entry with `action` from the list above —
@@ -544,7 +529,7 @@ After an Orca upgrade, re-extract the asar and read, in this order:
 1. `out/shared/plugins/plugin-manifest.js` (+ `plugin-content-pack-contributions.js`,
    `plugin-manifest-contribution-validation.js`) — manifest schema and cross-field rules.
 2. `plugin-capabilities.js`, `plugin-host-api.js` — capabilities and host methods (`panel:` flag).
-3. `plugin-panel-shell.js`, `plugin-panel-bridge.js` — panel CSP, tokens, bridge protocol, budgets.
+3. `frames/plugin-panel-shell.js`, `frames/plugin-frame-bridge.js`, `workers/plugin-panel-bridge-protocol.js` (in `app.asar.unpacked`) — panel CSP, `window.orca`, tokens, budgets.
 4. `out/main/plugin-host-entry.js`, `plugin-host-protocol.js`, `plugin-events.js` — worker contract.
 5. `plugin-command-actions.js` — built-in action aliases.
 6. `out/cli/runtime/{transport,metadata}.js`, `out/shared/runtime-rpc-envelope.js`,

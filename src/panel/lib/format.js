@@ -131,6 +131,7 @@ export const ITEM_MENU = [
   { id: 'run', label: 'Ejecutar…', hint: '', icon: 'run' },
   { id: 'open', label: 'Abrir en editor', hint: '', icon: 'edit' },
   { id: 'report', label: 'Ver reporte HTML', hint: 'navegador de Orca', icon: 'html' },
+  { id: 'evidence', label: 'Abrir carpeta de evidencias', hint: 'gestor de archivos', icon: 'folder' },
 ];
 
 /**

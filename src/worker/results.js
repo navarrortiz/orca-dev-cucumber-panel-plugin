@@ -7,6 +7,8 @@ export const DEFAULT_REPORT = 'reports/last-run.json';
 export const reportPath = ({ root, report = DEFAULT_REPORT }) => join(root, report);
 export const DEFAULT_HTML = 'reports/cucumber-report.html';
 export const htmlReportPath = ({ root, html = DEFAULT_HTML }) => join(root, html);
+export const DEFAULT_EVIDENCE = 'reports/evidence';
+export const evidencePath = ({ root, evidence = DEFAULT_EVIDENCE }) => join(root, evidence);
 
 /** Key of a scenario in the results map: by name, not line, so editing the .feature keeps the dot. */
 export const resultKey = (root, file, name) => `${root}|${file}|${name}`;
@@ -51,7 +53,7 @@ export function mergeReport(results, root, parsed, at) {
 
 /**
  * Targets of the cucumber-js processes alive right now, from `ps -eo pid=,args=` lines: unique
- * `features/x.feature` / `features/x.feature:12` tokens. Any terminal counts (the panel's or not).
+ * `features/x.feature` / `features/x.feature:12` / `features/folder` tokens. Any terminal counts (the panel's or not).
  * ponytail: no cwd, so two projects sharing a relative path light up together; read /proc/<pid>/cwd if it matters.
  */
 export function runningTargets(processes) {
@@ -60,16 +62,19 @@ export function runningTargets(processes) {
 
 // The binary as a whole token (`cucumber-js`, `cucumber.js`, `.../bin/cucumber`): a plain
 // "cucumber" would match this plugin's own path (orca-cucumber-panel-plugin/dist/rpc.mjs) and kill
-// the carrier shell, or any shell whose command line mentions a feature and the word.
+// a shell running `node dist/rpc.mjs`, or any shell whose command line mentions a feature and the word.
 const CUCUMBER_BIN = /(?:^|[\s/])cucumber(?:-js|\.js)?(?=\s|$)/;
 
 /** { target: [pid, …] } of live cucumber-js processes; `processes` = `ps -eo pid=,args=` lines. */
 export function runningPids(processes) {
   const out = {};
   for (const line of processes) {
-    if (!CUCUMBER_BIN.test(line)) continue;
+    const bin = line.match(CUCUMBER_BIN);
+    if (!bin) continue;
     const pid = Number(line.match(/^\s*(\d+)\s/)?.[1]);
-    for (const m of line.matchAll(/(?:^|[\s'"=])((?:[\w.-]+\/)*[\w.-]+\.feature(?::\d+)?)(?=$|[\s'"])/g)) {
+    // After the binary: `x.feature[:line]`, or a folder (`features/auth`, has a `/`, last segment without a dot).
+    const args = ` ${line.slice(bin.index + bin[0].length)}`;
+    for (const m of args.matchAll(/(?:^|[\s'"=])((?:[\w.-]+\/)*[\w.-]+\.feature(?::\d+)?|(?:[\w.-]+\/)+[\w-]+)\/?(?=$|[\s'"])/g)) {
       (out[m[1]] ??= []);
       if (pid) out[m[1]].push(pid);
     }

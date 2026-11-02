@@ -1,5 +1,5 @@
 // Actions this plugin exposes through the messaging SDK (src/sdk). Reached from the panel (no
-// popup, via the carrier terminal) or by hand: `node dist/rpc.mjs <action> '{"params":{…}}'`.
+// popup, orca.plugin.request) or by hand: `node dist/rpc.mjs <action> '{"params":{…}}'`.
 // Params come from outside the process: validate everything.
 import { join, sep } from 'node:path';
 import { requireAbsolute, requireString } from '../sdk/actions.js';
@@ -24,8 +24,9 @@ export const actions = {
       const command = requireString(ACTION.runInTerminal, params, 'command');
       const title = typeof params.title === 'string' && params.title.trim() ? params.title.slice(0, 80) : 'Cucumber';
       const worktree = await runtime.worktreeOf(root);
-      // The terminal starts at the worktree root; the project may live in a subfolder.
-      const terminalId = await runtime.createTerminal({ worktreeId: worktree.id, command: `cd ${shellQuote(root)} && ${command}`, title });
+      // The terminal starts at the worktree root; the project may live in a subfolder. A green run
+      // closes its own tab (plain `exit` sometimes leaves the pane open); a red one stays open to read.
+      const terminalId = await runtime.createTerminal({ worktreeId: worktree.id, command: `cd ${shellQuote(root)} && ${command} && orca terminal close --terminal "$ORCA_TERMINAL_HANDLE"`, title });
       return { terminalId };
     },
   },

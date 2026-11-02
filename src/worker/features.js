@@ -37,7 +37,7 @@ export function parseFeature(text) {
   return feature;
 }
 
-/** projects.json = [{ name, root, features?, command, commands?, report?, html? }]; report = cucumber JSON output, html = its HTML report, both relative to root; commands = { label: template } → extra ⋯ entries. @returns {string[]} errors */
+/** projects.json = [{ name, root, features?, command, commands?, report?, html?, evidence? }]; report = cucumber JSON output, html = its HTML report, evidence = per-step screenshots folder, both relative to root; commands = { label: template } → extra ⋯ entries. @returns {string[]} errors */
 export function validateProjects(list) {
   if (!Array.isArray(list)) return ['must be an array of { name, root, command, features? }'];
   return list.flatMap((p, i) => [
@@ -47,6 +47,7 @@ export function validateProjects(list) {
     ...(p?.features === undefined || typeof p.features === 'string' ? [] : [`[${i}].features must be a relative folder`]),
     ...(p?.report === undefined || typeof p.report === 'string' ? [] : [`[${i}].report must be a relative file`]),
     ...(p?.html === undefined || typeof p.html === 'string' ? [] : [`[${i}].html must be a relative file`]),
+    ...(p?.evidence === undefined || typeof p.evidence === 'string' ? [] : [`[${i}].evidence must be a relative folder`]),
     ...Object.entries(p?.commands ?? {}).flatMap(([label, c]) => (typeof c === 'string' && c.includes(TARGET) ? [] : [`[${i}].commands["${label}"] must contain ${TARGET}`])),
   ]);
 }

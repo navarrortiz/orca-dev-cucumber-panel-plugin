@@ -1,9 +1,10 @@
 // Orca plugin messaging SDK — wire constants. Plugin-agnostic: nothing here knows about Cucumber.
-// Everything rides on Orca's runtime RPC (what the `orca` CLI speaks), not on the plugin API.
-// Discovered in Orca 1.4.216; EXPERIMENTAL, re-verify on upgrade (AGENTS.md "Messaging SDK").
+// Panel → worker rides on the plugin API (plugin.request / panels.handle, Orca ≥ 1.4.245); CLI →
+// worker and worker → Orca on the runtime RPC (what the `orca` CLI speaks).
+// EXPERIMENTAL, re-verify on upgrade (AGENTS.md "Messaging SDK").
 
-// The one worker command every SDK plugin declares in contributes.commands (no `action`).
-// args: { action, params?, carrier? } → the action's return value.
+// The one worker command every SDK plugin declares in contributes.commands (no `action`), also the
+// panel request name (orca.panels.handle). args: { action, params? } → the action's return value.
 export const INVOKE_COMMAND = 'sdk-invoke';
 
 // Runtime RPC methods the SDK uses. Params per method: out/cli/handlers/*.js in the Orca bundle.
@@ -19,9 +20,13 @@ export const RPC_METHOD = {
   // (browser.openUrl needs that worktree's browser pane already open: browser_host_unavailable otherwise.)
 };
 
-// <script id="panel-data" type="application/json"> in the panel HTML, patched by the worker (the
-// only worker → panel channel): { titles: { [terminalId]: { title, agent? } }, carriers: [terminalId] }
-export const PANEL_DATA_ID = 'panel-data';
+// Worker → panel push (orca.panels.post → orca.plugin.on): the full snapshot { titles, …plugin data }.
+export const PANEL_EVENT = 'sdk-data';
 
-// Built-in actions every channel answers.
-export const BUILTIN_ACTION = { ping: 'ping', list: 'actions' };
+// Built-in actions every channel answers. send-text: { terminalId, text, enter? } → { accepted }
+// (panels can't call terminal.sendText since Orca 1.4.245); state: {} → the current PANEL_EVENT snapshot.
+export const BUILTIN_ACTION = { ping: 'ping', list: 'actions', sendText: 'send-text', state: 'state' };
+
+// Title of the "carrier" terminals older SDK versions kept per worktree (the panel typed RPC lines
+// into them). No longer created; still left out of terminal titles/pickers until users close them.
+export const CARRIER_TITLE = 'Orca plugins (rpc)';

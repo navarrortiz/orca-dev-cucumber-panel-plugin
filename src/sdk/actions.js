@@ -1,5 +1,7 @@
 import { BUILTIN_ACTION } from './protocol.js';
 
+const HOST_SEND_TEXT = 'terminal.sendText'; // plugin host API, worker only (needs terminal:send)
+
 /**
  * Action router: the worker side of `sdk-invoke`. Pure: no IPC, testable with fakes.
  *
@@ -17,6 +19,12 @@ export function createActionRouter(actions, ctx) {
     const { action, params } = envelope ?? {};
     if (action === BUILTIN_ACTION.ping) return { pong: true, at: Date.now() };
     if (action === BUILTIN_ACTION.list) return Object.entries(actions).map(([name, a]) => ({ name, description: a.description ?? '' }));
+    // Orca ≥ 1.4.245 only lets workers call terminal.sendText: panels type through here.
+    if (action === BUILTIN_ACTION.sendText) {
+      const terminalId = requireString(action, params, 'terminalId');
+      const text = requireString(action, params, 'text');
+      return ctx.host.call(HOST_SEND_TEXT, { terminalId, text, enter: params.enter === true });
+    }
     if (typeof action !== 'string' || !Object.hasOwn(actions, action)) throw new Error(`Acción desconocida: ${String(action)}`);
     return actions[action].run(params ?? {}, ctx);
   };

@@ -1,40 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createBridge } from '../src/panel/bridge.js';
 import { describeContext, describeTerminals, featuresIn, filterProjects, folderTree, shellQuote, terminalIcon, toCommand, highlightSteps, itemMenu, referenceText, validateSend } from '../src/panel/lib/format.js';
-import { PANEL_MESSAGE } from '../src/shared/protocol.js';
+import { createOrcaClient } from '../src/panel/orca.js';
 
-function fakeWindow() {
-  const listeners = [];
-  const parent = { sent: [], postMessage: (msg) => parent.sent.push(msg) };
-  return {
-    parent,
-    addEventListener: (_type, fn) => listeners.push(fn),
-    reply: (data, source = parent) => listeners.forEach((fn) => fn({ source, data })),
+test('orca client: readContext is a host call, sendText and actions go to the worker', async () => {
+  const calls = [];
+  const orca = {
+    host: { call: async (...args) => (calls.push(['host', ...args]), null) },
+    plugin: { request: async (...args) => (calls.push(['request', ...args]), { accepted: true }) },
   };
-}
-
-test('bridge resolves with the value of the matching result', async () => {
-  const win = fakeWindow();
-  const promise = createBridge(win).call('workspace.readContext');
-  const { requestId, type } = win.parent.sent[0];
-  assert.equal(type, PANEL_MESSAGE.request);
-  win.reply({ type: PANEL_MESSAGE.result, requestId, ok: true, value: 42 });
-  assert.equal(await promise, 42);
-});
-
-test('bridge rejects with the host error code', async () => {
-  const win = fakeWindow();
-  const promise = createBridge(win).call('terminal.sendText');
-  win.reply({ type: PANEL_MESSAGE.result, requestId: win.parent.sent[0].requestId, ok: false, errorCode: 'rate_limited', error: 'slow down' });
-  await assert.rejects(promise, { code: 'rate_limited', message: 'slow down' });
-});
-
-test('bridge ignores results from anything but the parent window', async () => {
-  const win = fakeWindow();
-  const promise = createBridge(win, { timeoutMs: 20 }).call('x');
-  win.reply({ type: PANEL_MESSAGE.result, requestId: win.parent.sent[0].requestId, ok: true, value: 1 }, {});
-  await assert.rejects(promise, { code: 'timeout' });
+  const client = createOrcaClient(orca);
+  assert.equal(await client.readContext(), null);
+  assert.deepEqual(await client.sendText('t1', 'ls', true), { accepted: true });
+  await client.send('open-file', { root: '/r' });
+  assert.deepEqual(calls, [
+    ['host', 'workspace.readContext', {}],
+    ['request', 'sdk-invoke', { action: 'send-text', params: { terminalId: 't1', text: 'ls', enter: true } }],
+    ['request', 'sdk-invoke', { action: 'open-file', params: { root: '/r' } }],
+  ]);
 });
 
 test('validateSend rejects a missing terminal and oversized text', () => {
@@ -62,10 +45,10 @@ test('filterProjects keeps a matching feature whole, else only matching scenario
 
 test('itemMenu appends projects.json commands, the template as id', () => {
   const menu = itemMenu({ Headed: 'H=1 x {target}' });
-  assert.deepEqual(menu.map((m) => m.id), ['run', 'H=1 x {target}', 'send', 'open', 'report']);
+  assert.deepEqual(menu.map((m) => m.id), ['run', 'H=1 x {target}', 'send', 'open', 'report', 'evidence']);
   assert.deepEqual(menu[1], { id: 'H=1 x {target}', label: 'Headed…', hint: '', icon: 'eye' });
-  assert.deepEqual(itemMenu().map((m) => m.id), ['run', 'send', 'open', 'report']);
-  assert.deepEqual(itemMenu({}, false).map((m) => m.id), ['run', 'send', 'report']); // folder: nothing to open
+  assert.deepEqual(itemMenu().map((m) => m.id), ['run', 'send', 'open', 'report', 'evidence']);
+  assert.deepEqual(itemMenu({}, false).map((m) => m.id), ['run', 'send', 'report', 'evidence']); // folder: nothing to open
 });
 
 test('referenceText: absolute path, optional title', () => {

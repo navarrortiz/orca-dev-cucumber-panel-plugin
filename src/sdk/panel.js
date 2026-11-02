@@ -1,47 +1,28 @@
-// SDK, panel side: send an action to the worker from the sandboxed panel, without a popup.
+// SDK, panel side: send actions to the worker and follow its data.
 //
-//   const channel = createPanelChannel({ orca, cliPath: __SDK_CLI__, data: readPanelData(document) });
-//   const r = await channel.send('open-file', { path });   // { sent: true } | { sent: false, reason }
+//   const channel = createPanelChannel({ orca: window.orca });
+//   const value = await channel.send('open-file', { path });   // the action's return value; throws on failure
+//   channel.subscribe((snapshot) => render(snapshot));         // now (state request) + every worker push
 //
-// The panel's only way out is terminal.sendText, and the host only accepts terminals of the focused
-// worktree. So it types `node <cli> <action> '<json>'` into the worker's carrier terminal of that
-// worktree; the CLI calls plugins.invokeCommand → worker. Fire-and-forget: the reply lands in the
-// carrier (the panel can't read terminals); results come back, if at all, as panel data.
-import { shellQuote } from '../shared/shell.js';
-import { PANEL_DATA_ID } from './protocol.js';
+// Orca ≥ 1.4.245 gives panels `window.orca.plugin.request(name, input)`, answered by the worker's
+// `orca.panels.handle(name, …)`, and `orca.plugin.on(event, fn)` for its `orca.panels.post`. The SDK
+// routes every action through one handler, INVOKE_COMMAND (the same name the CLI invokes).
+import { BUILTIN_ACTION, INVOKE_COMMAND, PANEL_EVENT } from './protocol.js';
 
-/** Data the worker patched into the page: { titles, carriers }; empty until the worker ran once. */
-export function readPanelData(doc) {
-  const { titles = {}, carriers = [], ...rest } = JSON.parse(doc.getElementById(PANEL_DATA_ID)?.textContent || '{}');
-  return { titles, carriers, ...rest }; // rest = whatever the worker's `data()` adds
-}
-
-/** The line typed into a terminal. Pure. */
-export function toCliCommand(cliPath, action, envelopeParams) {
-  return `node ${shellQuote(cliPath)} ${shellQuote(action)} ${shellQuote(JSON.stringify(envelopeParams))}`;
-}
-
-/**
- * @param {{ orca: { readContext: () => Promise<any>, sendText: (id: string, text: string, enter?: boolean) => Promise<{accepted: boolean}> },
- *   cliPath: string, data: { carriers: string[] } }} options
- */
-export function createPanelChannel({ orca, cliPath, data }) {
-  const isCarrier = (id) => data.carriers.includes(id);
+/** @param {{ orca: { plugin: { request: Function, on: Function } } }} options */
+export function createPanelChannel({ orca }) {
+  const send = (action, params = {}) => orca.plugin.request(INVOKE_COMMAND, { action, params });
   return {
-    isCarrier,
-    /** Carrier of the focused worktree, or null (worker not running / worktree focused < 1 poll ago). */
-    async carrier() {
-      const context = await orca.readContext();
-      return context?.terminals.find((t) => isCarrier(t.id))?.id ?? null;
-    },
-    /** Line to type by hand into `terminalId` (fallback when there's no carrier). */
-    command: (action, params) => toCliCommand(cliPath, action, { params }),
-    /** @returns {Promise<{ sent: true } | { sent: false, reason: 'no-carrier' | 'rejected' }>} */
-    async send(action, params) {
-      const carrier = await this.carrier();
-      if (!carrier) return { sent: false, reason: 'no-carrier' };
-      const { accepted } = await orca.sendText(carrier, this.command(action, params), true);
-      return accepted ? { sent: true } : { sent: false, reason: 'rejected' };
+    send,
+    /**
+     * fn(snapshot) with the current state, then on every push. Also starts the worker if needed.
+     * A push that lands while the state request is in flight is newer: the answer is then dropped.
+     * @returns {Promise<void>} rejects if the state request fails (pushes still arrive)
+     */
+    subscribe(fn) {
+      let pushed = false;
+      orca.plugin.on(PANEL_EVENT, (snapshot) => ((pushed = true), fn(snapshot)));
+      return send(BUILTIN_ACTION.state).then((snapshot) => pushed || fn(snapshot));
     },
   };
 }

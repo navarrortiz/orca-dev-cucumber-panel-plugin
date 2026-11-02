@@ -1,7 +1,7 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { constants, watch } from 'node:fs';
-import { copyFile, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path, { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { HOST_METHOD, LIMITS } from '../shared/protocol.js';
@@ -11,6 +11,19 @@ import { htmlReportPath, reportPath } from './results.js';
 const run = promisify(execFile);
 
 const CLI_NAME = { win32: 'orca.exe', darwin: 'orca', linux: 'orca-ide' };
+
+/**
+ * Orca forks the worker with only PATH/HOME/LANG: no DISPLAY / WAYLAND_DISPLAY / DBus, so xdg-open
+ * can't reach the desktop. Borrow the session's from systemd's user manager (GNOME/KDE export them
+ * there). ponytail: non-systemd desktops keep the bare env; read another process' /proc env if that bites.
+ */
+async function desktopEnv(env = process.env) {
+  if (env.DISPLAY || env.WAYLAND_DISPLAY) return env;
+  const base = { ...env, XDG_RUNTIME_DIR: env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid()}` };
+  const { stdout } = await run('systemctl', ['--user', 'show-environment'], { env: base, timeout: 5_000 }).catch(() => ({ stdout: '' }));
+  const session = Object.fromEntries(stdout.split('\n').filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+  return { ...session, ...base };
+}
 
 /**
  * `orca` on PATH first; otherwise the CLI Orca ships in its own resources/bin (the worker runs on
@@ -139,6 +152,19 @@ export function createDeps(host, projectsPath, panelPath) {
       return `http://127.0.0.1:${server.address().port}/report?root=${encodeURIComponent(project.root)}`;
     },
     stopServer: () => server?.close(),
+    exists: (path) => stat(path).then(() => true, () => false),
+    /** OS file manager on `dir` (mkdir -p first, so a project that never ran with evidence opens empty). */
+    async openFolder(dir) {
+      await mkdir(dir, { recursive: true });
+      const [cmd, ...args] = { darwin: ['open'], win32: ['explorer'] }[process.platform] ?? ['xdg-open'];
+      const env = process.platform === 'linux' ? await desktopEnv() : process.env;
+      // Detached: some xdg-open backends block until the file manager closes.
+      await new Promise((resolve, reject) => {
+        const child = spawn(cmd, [...args, dir], { detached: true, stdio: 'ignore', env });
+        child.once('error', (error) => reject(new Error(`No se pudo abrir ${dir}: ${error.message}`)));
+        child.once('spawn', () => (child.unref(), resolve()));
+      });
+    },
     readResults: () => readFile(resultsPath, 'utf8').then(JSON.parse, () => ({})),
     writeResults: (results) => writeFile(resultsPath, JSON.stringify(results)),
     async openInEditor() {
