@@ -144,7 +144,7 @@ main.js (controller) ──► view.js        (presentation)
 ```
 
 Worker: `main.js` → `handlers.js` → `orca.js` → `ctx.host`, and `main.js` → `sdk/worker.js` →
-`actions.js` → `sdk/runtime.js` (runtime socket). Panel: `main.js` → `sdk/panel.js` → `orca.js`.
+`actions.js` → `sdk/runtime.js` (runtime socket). Panel: `main.js` → `orca.js` → `sdk/panel.js` → `window.orca`.
 `src/sdk/` imports only `shared/shell.js` and itself: no plugin code, so it can be copied as is.
 
 - Arrows point one way. `view` never imports `orca`; `lib` imports nothing but

@@ -48,5 +48,5 @@ export const LIMITS = {
   notifyTitleMax: 120,
   notifyBodyMax: 1000,
   panelMessageBytes: 64 * 1024,
-  panelRate: { maxMessages: 30, perMs: 10_000 }, // per plugin, all panels share it
+  panelRate: { maxMessages: 120, perMs: 10_000 }, // per plugin, all panels share it (Orca 1.4.246)
 };
